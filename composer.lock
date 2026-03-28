@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "1e770a4eb289a739351377e689721a02",
+    "content-hash": "5e127b2ae7902c7c91538310bc53329e",
     "packages": [
         {
             "name": "fakerphp/faker",
@@ -133,16 +133,16 @@
         },
         {
             "name": "luxid/rocket",
-            "version": "v0.1.6",
+            "version": "v0.1.8",
             "source": {
                 "type": "git",
                 "url": "https://github.com/LuxidDev/Luxid-Rocket.git",
-                "reference": "fda602dd5dd838420e359dcc9788af37a28d6d64"
+                "reference": "4fef434a2e2dba121e76c86a90026995e7c4fdc9"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/LuxidDev/Luxid-Rocket/zipball/fda602dd5dd838420e359dcc9788af37a28d6d64",
-                "reference": "fda602dd5dd838420e359dcc9788af37a28d6d64",
+                "url": "https://api.github.com/repos/LuxidDev/Luxid-Rocket/zipball/4fef434a2e2dba121e76c86a90026995e7c4fdc9",
+                "reference": "4fef434a2e2dba121e76c86a90026995e7c4fdc9",
                 "shasum": ""
             },
             "require": {
@@ -182,9 +182,9 @@
             ],
             "support": {
                 "issues": "https://github.com/LuxidDev/Luxid-Rocket/issues",
-                "source": "https://github.com/LuxidDev/Luxid-Rocket/tree/v0.1.6"
+                "source": "https://github.com/LuxidDev/Luxid-Rocket/tree/v0.1.8"
             },
-            "time": "2026-03-28T11:18:07+00:00"
+            "time": "2026-03-28T14:30:54+00:00"
         },
         {
             "name": "phpoption/phpoption",
