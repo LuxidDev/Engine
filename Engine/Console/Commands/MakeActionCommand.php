@@ -57,7 +57,9 @@ class {$className} extends LuxidAction
     public function index()
     {
         // Your action logic here
-        return \$Response::success(['message' => 'Action executed successfully']);
+        return \Response::success([
+          'message' => 'Action executed successfully'
+        ]);
     }
 }
 PHP;
@@ -71,7 +73,15 @@ PHP;
       $this->line("");
       $this->line("\033[1;33m💡 Usage example:\033[0m");
       $this->line("Add to your routes file:");
-      $this->line("  \$router->get('/example', [\\{$namespace}\\{$className}::class, 'index']);");
+
+      $routeName = strtolower($className);
+
+      $this->line(
+        "  route('{$routeName}.index')
+              ->get('/api/{$routeName}')
+              ->uses({$className}::class, 'index')
+              ->open();"
+      );
     } else {
       $this->error("Failed to create Action");
     }
