@@ -1,105 +1,96 @@
 <?php
+// Engine/Console/Commands/FreshCommand.php
 
 namespace Luxid\Console\Commands;
 
 use Luxid\Console\Command;
+use Rocket\Connection\Connection;
+use Rocket\Migration\Migrator;
+use Rocket\Migration\Rocket;
 
 class FreshCommand extends Command
 {
-    protected string $description = 'Fresh install (clear cache, run migrations, seed)';
+  protected string $description = 'Drop all tables and re-run all migrations';
 
-    public function handle(array $argv): int
-    {
-        $this->parseArguments($argv);
+  public function handle(array $argv): int
+  {
+    $this->parseArguments($argv);
 
-        $this->line("🧹 Starting fresh installation...");
+    $this->line("🧹 Fresh migration: dropping all tables and re-running migrations");
 
-        $steps = [
-            'Clear cache' => fn() => $this->clearCache(),
-            'Drop database' => fn() => $this->dropDatabase(),
-            'Create database' => fn() => $this->createDatabase(),
-            'Run migrations' => fn() => $this->runMigrations(),
-            'Run seeders' => fn() => $this->runSeeders(),
-        ];
-
-        $total = count($steps);
-        $current = 1;
-
-        foreach ($steps as $label => $action) {
-            $this->line("");
-            $this->line("📦 Step {$current}/{$total}: {$label}");
-            try {
-                $action();
-                $this->line("  \033[32m✓ Completed\033[0m");
-            } catch (\Exception $e) {
-                $this->error("  ✗ Failed: " . $e->getMessage());
-                return 1;
-            }
-            $current++;
-        }
-
-        $this->line("");
-        $this->success("Fresh installation completed successfully!");
-        $this->line("🚀 Your application is ready!");
-
-        return 0;
+    if (!$this->confirm("This will drop all tables! Are you sure?", false)) {
+      $this->line("Operation cancelled");
+      return 0;
     }
 
-    private function clearCache(): void
-    {
-        $cachePath = $this->getProjectRoot() . '/cache';
-        if (is_dir($cachePath)) {
-            $this->removeDirectory($cachePath);
-        }
-        mkdir($cachePath, 0755, true);
-        $this->info("Cache cleared");
+    try {
+      $connection = $this->getDatabaseConnection();
+
+      // Set the connection for Rocket
+      Rocket::setConnection($connection);
+
+      $migrationsPath = $this->getMigrationsPath();
+      $migrator = new Migrator($connection, $migrationsPath);
+
+      $this->line("🔄 Running fresh migration...");
+      $migrator->fresh();
+
+      return 0;
+    } catch (\Exception $e) {
+      $this->error("Error: " . $e->getMessage());
+      $this->line("📋 Stack trace:");
+      $this->line($e->getTraceAsString());
+      return 1;
+    }
+  }
+
+  protected function getDatabaseConnection(): Connection
+  {
+    try {
+      return Connection::getInstance();
+    } catch (\RuntimeException $e) {
+      $this->initializeConnection();
+      return Connection::getInstance();
+    }
+  }
+
+  protected function initializeConnection(): void
+  {
+    $rootPath = $this->getProjectRoot();
+    $envFile = $rootPath . '/.env';
+
+    if (file_exists($envFile)) {
+      $dotenv = \Dotenv\Dotenv::createImmutable($rootPath);
+      $dotenv->load();
     }
 
-    private function dropDatabase(): void
-    {
-        $this->warning("Dropping database...");
-        // This would require database connection setup
-        $this->line("  Skipping (database connection required)");
+    $configFile = $this->getConfigPath() . '/config.php';
+    if (file_exists($configFile)) {
+      $config = require $configFile;
+      if (isset($config['db'])) {
+        Connection::initialize($config['db']);
+        return;
+      }
     }
 
-    private function createDatabase(): void
-    {
-        $this->info("Creating database...");
-        // This would require database connection setup
-        $this->line("  Skipping (database connection required)");
-    }
+    $dsn = $_ENV['DB_DSN'] ?? '';
+    $user = $_ENV['DB_USER'] ?? 'root';
+    $password = $_ENV['DB_PASSWORD'] ?? '';
 
-    private function runMigrations(): void
-    {
-        $migrateCommand = new MigrateCommand();
-        $argv = ['juice', 'db:migrate', '--fresh'];
-        $migrateCommand->handle($argv);
-    }
+    Connection::initialize([
+      'dsn' => $dsn,
+      'user' => $user,
+      'password' => $password,
+    ]);
+  }
 
-    private function runSeeders(): void
-    {
-        $seedPath = $this->getProjectRoot() . '/seeds';
-        if (!is_dir($seedPath)) {
-            $this->warning("No seeders directory found");
-            return;
-        }
+  protected function getMigrationsPath(): string
+  {
+    return $this->getProjectRoot() . '/migrations';
+  }
 
-        $this->info("Running seeders...");
-        // Seeders would be implemented here
-        $this->line("  Seeders not implemented yet");
-    }
-
-    private function removeDirectory(string $path): void
-    {
-        if (!is_dir($path)) {
-            return;
-        }
-
-        $files = array_diff(scandir($path), ['.', '..']);
-        foreach ($files as $file) {
-            $filePath = $path . '/' . $file;
-            is_dir($filePath) ? $this->removeDirectory($filePath) : unlink($filePath);
-        }
-        rmdir($path);
-    }
+  protected function getConfigPath(): string
+  {
+    return $this->getProjectRoot() . '/config';
+  }
 }

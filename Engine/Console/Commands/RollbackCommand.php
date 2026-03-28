@@ -3,145 +3,88 @@
 namespace Luxid\Console\Commands;
 
 use Luxid\Console\Command;
-use Luxid\Foundation\Application;
+use Rocket\Connection\Connection;
+use Rocket\Migration\Migrator;
+use Rocket\Migration\Rocket;
 
 class RollbackCommand extends Command
 {
-    protected string $description = 'Rollback the last migration';
+  protected string $description = 'Rollback the last database migration';
 
-    public function handle(array $argv): int
-    {
-        $this->parseArguments($argv);
+  public function handle(array $argv): int
+  {
+    $this->parseArguments($argv);
 
-        $steps = $this->options['step'] ?? 1;
+    $steps = $this->args[0] ?? 1;
 
-        $this->line("↩️  Rolling back {$steps} migration(s)...");
+    try {
+      $connection = $this->getDatabaseConnection();
 
-        // Setup application
-        $this->setupApplication();
+      // Set the connection for Rocket
+      Rocket::setConnection($connection);
 
-        // Ensure migrations table exists
-        $this->ensureMigrationsTable();
+      $migrationsPath = $this->getMigrationsPath();
+      $migrator = new Migrator($connection, $migrationsPath);
 
-        // Get last applied migrations
-        $appliedMigrations = $this->getLastAppliedMigrations($steps);
+      $this->line("⏪ Rolling back {$steps} migration(s)...");
+      $migrator->rollback((int)$steps);
 
-        if (empty($appliedMigrations)) {
-            $this->line("✅ No migrations to rollback");
-            return 0;
-        }
+      return 0;
+    } catch (\Exception $e) {
+      $this->error("Error: " . $e->getMessage());
+      $this->line("📋 Stack trace:");
+      $this->line($e->getTraceAsString());
+      return 1;
+    }
+  }
 
-        $migrationsPath = $this->getMigrationsPath();
-        $db = Application::$app->db;
+  protected function getDatabaseConnection(): Connection
+  {
+    try {
+      return Connection::getInstance();
+    } catch (\RuntimeException $e) {
+      $this->initializeConnection();
+      return Connection::getInstance();
+    }
+  }
 
-        $rolledBack = 0;
+  protected function initializeConnection(): void
+  {
+    $rootPath = $this->getProjectRoot();
+    $envFile = $rootPath . '/.env';
 
-        foreach ($appliedMigrations as $migration) {
-            $migrationId = $migration['migration_id'];
-            $fileName = $migrationId . '.php';
-            $filePath = $migrationsPath . '/' . $fileName;
-
-            if (!file_exists($filePath)) {
-                $this->warning("Migration file not found: {$fileName}");
-                continue;
-            }
-
-            $this->line("  \033[33mRolling back:\033[0m {$migrationId}");
-
-            try {
-                require_once $filePath;
-
-                if (!class_exists($migrationId)) {
-                    $this->warning("    Class {$migrationId} not found");
-                    continue;
-                }
-
-                $instance = new $migrationId();
-                if (method_exists($instance, 'down')) {
-                    // Start transaction
-                    $db->pdo->beginTransaction();
-
-                    try {
-                        $instance->down();
-
-                        // Remove migration record
-                        $stmt = $db->pdo->prepare("DELETE FROM migrations WHERE migration_id = ?");
-                        $stmt->execute([$migrationId]);
-
-                        $db->pdo->commit();
-                        $this->line("    \033[32m✓ Rolled back\033[0m");
-                        $rolledBack++;
-                    } catch (\Exception $e) {
-                        $db->pdo->rollBack();
-                        throw $e;
-                    }
-                } else {
-                    $this->warning("    No down() method found");
-                }
-            } catch (\Exception $e) {
-                $this->error("    Failed: " . $e->getMessage());
-                return 1;
-            }
-        }
-
-        if ($rolledBack > 0) {
-            $this->success("{$rolledBack} migration(s) rolled back successfully!");
-        }
-
-        return 0;
+    if (file_exists($envFile)) {
+      $dotenv = \Dotenv\Dotenv::createImmutable($rootPath);
+      $dotenv->load();
     }
 
-    private function setupApplication(): void
-    {
-        // Load environment
-        $rootPath = $this->getProjectRoot();
-        $envFile = $rootPath . '/.env';
-
-        if (file_exists($envFile)) {
-            $dotenv = \Dotenv\Dotenv::createImmutable($rootPath);
-            $dotenv->load();
-        }
-
-        // Create config
-        $config = [
-            'db' => [
-                'dsn' => $_ENV['DB_DSN'] ?? '',
-                'user' => $_ENV['DB_USER'] ?? '',
-                'password' => $_ENV['DB_PASSWORD'] ?? '',
-            ],
-        ];
-
-        // Create application instance if not already created
-        if (!isset(Application::$app)) {
-            new Application($rootPath, $config);
-        }
+    $configFile = $this->getConfigPath() . '/config.php';
+    if (file_exists($configFile)) {
+      $config = require $configFile;
+      if (isset($config['db'])) {
+        Connection::initialize($config['db']);
+        return;
+      }
     }
 
-    private function ensureMigrationsTable(): void
-    {
-        $db = Application::$app->db;
+    $dsn = $_ENV['DB_DSN'] ?? '';
+    $user = $_ENV['DB_USER'] ?? 'root';
+    $password = $_ENV['DB_PASSWORD'] ?? '';
 
-        $sql = "CREATE TABLE IF NOT EXISTS migrations (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            migration_id VARCHAR(255) NOT NULL UNIQUE,
-            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            INDEX idx_migration_id (migration_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
+    Connection::initialize([
+      'dsn' => $dsn,
+      'user' => $user,
+      'password' => $password,
+    ]);
+  }
 
-        $db->pdo->exec($sql);
-    }
+  protected function getMigrationsPath(): string
+  {
+    return $this->getProjectRoot() . '/migrations';
+  }
 
-    private function getLastAppliedMigrations(int $limit = 1): array
-    {
-        $db = Application::$app->db;
-
-        try {
-            $stmt = $db->pdo->prepare("SELECT migration_id FROM migrations ORDER BY applied_at DESC LIMIT ?");
-            $stmt->bindValue(1, $limit, \PDO::PARAM_INT);
-            $stmt->execute();
-            return $stmt->fetchAll(\PDO::FETCH_ASSOC);
-        } catch (\Exception $e) {
-            return [];
-        }
-    }
+  protected function getConfigPath(): string
+  {
+    return $this->getProjectRoot() . '/config';
+  }
 }

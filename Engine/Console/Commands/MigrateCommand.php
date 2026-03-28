@@ -1,114 +1,94 @@
 <?php
-// Engine/Console/Commands/MigrateCommand.php
+
 namespace Luxid\Console\Commands;
 
 use Luxid\Console\Command;
+use Rocket\Connection\Connection;
+use Rocket\Migration\Migrator;
+use Rocket\Migration\Rocket;
 
 class MigrateCommand extends Command
 {
-    protected string $description = 'Run database migrations';
+  protected string $description = 'Run database migrations';
 
-    public function handle(array $argv): int
-    {
-        $this->parseArguments($argv);
+  public function handle(array $argv): int
+  {
+    $this->parseArguments($argv);
 
-        $fresh = $this->options['fresh'] ?? false;
+    try {
+      $connection = $this->getDatabaseConnection();
 
-        if ($fresh) {
-            $this->line("🧹 Fresh migration: dropping all tables and re-running migrations");
+      // Set the connection for Rocket
+      Rocket::setConnection($connection);
 
-            if (!$this->confirm("This will drop all tables! Are you sure?", false)) {
-                $this->line("Operation cancelled");
-                return 0;
-            }
+      $migrationsPath = $this->getMigrationsPath();
+      $migrator = new Migrator($connection, $migrationsPath);
 
-            // For fresh, we need to manually drop tables
-            $this->setupMinimalApplication();
-            $db = $this->getDatabaseConnection();
+      $this->line("🔄 Running migrations...");
+      $migrator->run();
 
-            try {
-                $stmt = $db->pdo->query("SHOW TABLES");
-                $tables = $stmt->fetchAll(\PDO::FETCH_COLUMN);
+      return 0;
+    } catch (\Exception $e) {
+      $this->error("Error: " . $e->getMessage());
+      $this->line("📋 Stack trace:");
+      $this->line($e->getTraceAsString());
+      return 1;
+    }
+  }
 
-                if (!empty($tables)) {
-                    $this->line("Dropping tables...");
-                    $db->pdo->exec("SET FOREIGN_KEY_CHECKS = 0");
+  protected function getDatabaseConnection(): Connection
+  {
+    // Check if Rocket connection is already initialized
+    try {
+      $connection = Connection::getInstance();
+      return $connection;
+    } catch (\RuntimeException $e) {
+      // Connection not initialized, try to initialize from config
+      $this->initializeConnection();
+      return Connection::getInstance();
+    }
+  }
 
-                    foreach ($tables as $table) {
-                        $this->line("  Dropping: {$table}");
-                        $db->pdo->exec("DROP TABLE IF EXISTS `{$table}`");
-                    }
+  protected function initializeConnection(): void
+  {
+    // Load environment
+    $rootPath = $this->getProjectRoot();
+    $envFile = $rootPath . '/.env';
 
-                    $db->pdo->exec("SET FOREIGN_KEY_CHECKS = 1");
-                }
-            } catch (\Exception $e) {
-                $this->error("Failed to drop tables: " . $e->getMessage());
-                return 1;
-            }
-        }
-
-        return $this->runMigrations();
+    if (file_exists($envFile)) {
+      $dotenv = \Dotenv\Dotenv::createImmutable($rootPath);
+      $dotenv->load();
     }
 
-    private function runMigrations(): int
-    {
-        $this->line("🔄 Running migrations...");
-
-        try {
-            // Setup minimal application for migrations
-            $this->setupMinimalApplication();
-            $db = $this->getDatabaseConnection();
-
-            // Use Luxid's built-in migration system
-            $db->applyMigrations();
-
-            $this->success("Migrations applied successfully!");
-            return 0;
-        } catch (\Exception $e) {
-            $this->error("Migration failed: " . $e->getMessage());
-            return 1;
-        }
+    // Get database config
+    $configFile = $this->getConfigPath() . '/config.php';
+    if (file_exists($configFile)) {
+      $config = require $configFile;
+      if (isset($config['db'])) {
+        Connection::initialize($config['db']);
+        return;
+      }
     }
 
-    private function setupMinimalApplication(): void
-    {
-        // Load environment
-        $rootPath = $this->getProjectRoot();
-        $envFile = $rootPath . '/.env';
+    // Fallback to environment variables
+    $dsn = $_ENV['DB_DSN'] ?? '';
+    $user = $_ENV['DB_USER'] ?? 'root';
+    $password = $_ENV['DB_PASSWORD'] ?? '';
 
-        if (file_exists($envFile)) {
-            $dotenv = \Dotenv\Dotenv::createImmutable($rootPath);
-            $dotenv->load();
-        }
+    Connection::initialize([
+      'dsn' => $dsn,
+      'user' => $user,
+      'password' => $password,
+    ]);
+  }
 
-        // Create minimal config
-        $config = [
-            'db' => [
-                'dsn' => $_ENV['DB_DSN'] ?? 'mysql:host=127.0.0.1;port=3306;dbname=luxid_todo',
-                'user' => $_ENV['DB_USER'] ?? 'root',
-                'password' => $_ENV['DB_PASSWORD'] ?? '',
-            ],
-            'userClass' => '', // Empty for CLI
-        ];
+  protected function getMigrationsPath(): string
+  {
+    return $this->getProjectRoot() . '/migrations';
+  }
 
-        // Create Application instance but prevent session start
-        if (!class_exists('Luxid\Foundation\Application')) {
-            require_once $this->getProjectRoot() . '/vendor/autoload.php';
-        }
-
-        // Temporarily override session_start to prevent errors
-        if (!function_exists('session_start')) {
-            function session_start($options = []) {
-                return true; // No-op for CLI
-            }
-        }
-
-        // Create application
-        new \Luxid\Foundation\Application($rootPath, $config);
-    }
-
-    private function getDatabaseConnection(): \Luxid\Database\Database
-    {
-        return \Luxid\Foundation\Application::$app->db;
-    }
+  protected function getConfigPath(): string
+  {
+    return $this->getProjectRoot() . '/config';
+  }
 }
