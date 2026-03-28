@@ -38,11 +38,10 @@
   "require": {
     "php": "^8.0",
     "vlucas/phpdotenv": "^5.6",
-    "luxid/rocket": "^0.1.4"
+    "luxid/rocket": "^0.1.5"
   },
   "minimum-stability": "dev",
   "prefer-stable": true
 }
-
 
 
