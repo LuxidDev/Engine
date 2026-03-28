@@ -28,6 +28,7 @@ use Luxid\Console\Commands\{
   MakeNovaLayoutCommand,
   MakeSeederCommand,
   MakeFactoryCommand,
+  SeedCommand,
 };
 
 class Application
@@ -67,6 +68,7 @@ class Application
       'make:nova:component' => MakeNovaComponentCommand::class,
       'make:nova:page' => MakeNovaPageCommand::class,
       'make:nova:layout' => MakeNovaLayoutCommand::class,
+      'seed' => SeedCommand::class,
       'make:seeder' => MakeSeederCommand::class,
       'make:factory' => MakeFactoryCommand::class,
     ];
@@ -174,6 +176,7 @@ class Application
       ["🗄️", "db:*", "Database operations"],
       ["⚡", "make:*", "Generate code"],
       ["🌱", "make:seeder", "Create a new seeder"],
+      ["🌱", "seed", "Run database seeders"],
     ];
 
     // Add package commands to menu
@@ -222,6 +225,7 @@ class Application
       'Server' => ['start'],
       'Application' => ['fresh', 'status', 'routes', 'env:check', 'version'],
       'Database' => array_filter(array_keys($commands), fn($c) => str_starts_with($c, 'db:')),
+      'Seeding' => ['seed'],
       'Make' => array_filter(array_keys($commands), fn($c) => str_starts_with($c, 'make:')),
     ];
 
