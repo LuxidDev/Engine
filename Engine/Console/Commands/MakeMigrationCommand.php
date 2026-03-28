@@ -15,8 +15,10 @@ class MakeMigrationCommand extends Command
         if (empty($this->args)) {
             $this->error("Migration name is required");
             $this->line("Usage: php juice make:migration <name>");
-            $this->line("Example: php juice make:migration create_users_table");
-            $this->line("Example: php juice make:migration add_email_to_users_table");
+            $this->line("Examples:");
+            $this->line("  php juice make:migration create_users_table");
+            $this->line("  php juice make:migration add_email_to_users");
+            $this->line("  php juice make:migration create_products_table");
             return 1;
         }
 
@@ -44,10 +46,9 @@ class MakeMigrationCommand extends Command
             $this->success("Migration created successfully!");
             $this->line("📁 Location: \033[1;34m{$relativePath}\033[0m");
 
-            // Show usage
             $this->line("");
             $this->line("\033[1;33m💡 Next steps:\033[0m");
-            $this->line("1. Edit the migration file to customize the SQL");
+            $this->line("1. Edit the migration file to customize the schema");
             $this->line("2. Run migration: \033[1;32mphp juice db:migrate\033[0m");
             $this->line("3. Rollback if needed: \033[1;32mphp juice db:rollback\033[0m");
         } else {
@@ -64,7 +65,7 @@ class MakeMigrationCommand extends Command
             return $this->createTableTemplate($className, $tableName);
         } elseif (strpos($migrationName, 'add_') === 0 && strpos($migrationName, '_to_') !== false) {
             // Add column migration
-            preg_match('/add_(.+)_to_(.+)_table/', $migrationName, $matches);
+            preg_match('/add_(.+)_to_(.+)/', $migrationName, $matches);
             if (count($matches) === 3) {
                 $column = $matches[1];
                 $tableName = $matches[2];
@@ -72,199 +73,164 @@ class MakeMigrationCommand extends Command
             }
         } elseif (strpos($migrationName, 'drop_') === 0 && strpos($migrationName, '_from_') !== false) {
             // Drop column migration
-            preg_match('/drop_(.+)_from_(.+)_table/', $migrationName, $matches);
+            preg_match('/drop_(.+)_from_(.+)/', $migrationName, $matches);
             if (count($matches) === 3) {
                 $column = $matches[1];
                 $tableName = $matches[2];
                 return $this->dropColumnTemplate($className, $tableName, $column);
             }
+        } elseif (strpos($migrationName, 'alter_') === 0) {
+            // Alter table migration
+            return $this->alterTableTemplate($className);
         }
 
         // Default generic migration
-        return <<<PHP
-<?php
-use Luxid\Database\Database;
-
-class {$className}
-{
-    /**
-     * Run the migration
-     */
-    public function apply():void
-    {
-        \$db = \\Luxid\\Foundation\\Application::\$app->db;
-
-        \$sql = "";
-
-        try {
-            \$db->pdo->exec(\$sql);
-            echo "Migration {$className} applied successfully\\n";
-        } catch (\\Exception \$e) {
-            throw new \\Exception("Migration failed: " . \$e->getMessage());
-        }
-    }
-
-    /**
-     * Reverse the migration
-     */
-    public function down(): void
-    {
-        \$db = \\Luxid\\Foundation\\Application::\$app->db;
-
-        \$sql = "";
-
-        try {
-            \$db->pdo->exec(\$sql);
-            echo "Migration {$className} reverted successfully\\n";
-        } catch (\\Exception \$e) {
-            throw new \\Exception("Rollback failed: " . \$e->getMessage());
-        }
-    }
-}
-PHP;
+        return $this->genericTemplate($className);
     }
 
     private function createTableTemplate(string $className, string $tableName): string
     {
         return <<<PHP
 <?php
-use Luxid\Database\Database;
 
-class {$className}
+use Rocket\Migration\Migration;
+use Rocket\Migration\Rocket;
+use Rocket\Migration\Column;
+
+class {$className} extends Migration
 {
-    /**
-     * Run the migration
-     */
-    public function apply(): void
+    public function up(): void
     {
-        \$db = \\Luxid\\Foundation\\Application::\$app->db;
-
-        \$sql = "CREATE TABLE IF NOT EXISTS `{$tableName}` (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            INDEX idx_created_at (created_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
-
-        try {
-            \$db->pdo->exec(\$sql);
-            echo "Table '{$tableName}' created successfully\\n";
-        } catch (\\Exception \$e) {
-            throw new \\Exception("Migration failed: " . \$e->getMessage());
-        }
+        Rocket::table('{$tableName}', function(\$column) {
+            \$column->id('id');
+            \$column->string('name');
+            \$column->timestamps();
+        });
     }
-
-    /**
-     * Reverse the migration
-     */
+    
     public function down(): void
     {
-        \$db = \\Luxid\\Foundation\\Application::\$app->db;
-
-        \$sql = "DROP TABLE IF EXISTS `{$tableName}`";
-
-        try {
-            \$db->pdo->exec(\$sql);
-            echo "Table '{$tableName}' dropped successfully\\n";
-        } catch (\\Exception \$e) {
-            throw new \\Exception("Rollback failed: " . \$e->getMessage());
-        }
+        Rocket::drop('{$tableName}');
     }
 }
 PHP;
     }
 
-    private function addColumnTemplate(string $className, string $tableName, string $columnName): string
+    private function addColumnTemplate(string $className, string $tableName, string $column): string
     {
-        $columnType = $this->guessColumnType($columnName);
-
+        $columnType = $this->guessColumnType($column);
+        
         return <<<PHP
 <?php
-use Luxid\Database\Database;
 
-class {$className}
+use Rocket\Migration\Migration;
+use Rocket\Migration\Rocket;
+use Rocket\Migration\Column;
+
+class {$className} extends Migration
 {
-    /**
-     * Run the migration
-     */
-    public function apply(): void
+    public function up(): void
     {
-        \$db = \\Luxid\\Foundation\\Application::\$app->db;
-
-        \$sql = "ALTER TABLE `{$tableName}` ADD COLUMN `{$columnName}` {$columnType}";
-
-        try {
-            \$db->pdo->exec(\$sql);
-            echo "Column '{$columnName}' added to '{$tableName}' successfully\\n";
-        } catch (\\Exception \$e) {
-            throw new \\Exception("Migration failed: " . \$e->getMessage());
-        }
+        // Add column using Rocket's schema builder
+        Rocket::table('{$tableName}', function(\$column) {
+            \$column->{$columnType}('{$column}');
+        });
+        
+        // Alternative: Use raw SQL if needed
+        // \$this->db->execute("ALTER TABLE {$tableName} ADD COLUMN {$column} {$columnType}");
     }
-
-    /**
-     * Reverse the migration
-     */
+    
     public function down(): void
     {
-        \$db = \\Luxid\\Foundation\\Application::\$app->db;
-
-        \$sql = "ALTER TABLE `{$tableName}` DROP COLUMN `{$columnName}`";
-
-        try {
-            \$db->pdo->exec(\$sql);
-            echo "Column '{$columnName}' removed from '{$tableName}' successfully\\n";
-        } catch (\\Exception \$e) {
-            throw new \\Exception("Rollback failed: " . \$e->getMessage());
-        }
+        Rocket::table('{$tableName}', function(\$column) {
+            // Remove column (Rocket doesn't have direct drop column, use raw SQL)
+        });
+        
+        // Raw SQL rollback
+        \$this->db->execute("ALTER TABLE {$tableName} DROP COLUMN {$column}");
     }
 }
 PHP;
     }
 
-    private function dropColumnTemplate(string $className, string $tableName, string $columnName): string
+    private function dropColumnTemplate(string $className, string $tableName, string $column): string
     {
         return <<<PHP
 <?php
-use Luxid\Database\Database;
 
-class {$className}
+use Rocket\Migration\Migration;
+use Rocket\Migration\Rocket;
+
+class {$className} extends Migration
 {
-    /**
-     * Run the migration
-     */
-    public function apply(): void
+    public function up(): void
     {
-        \$db = \\Luxid\\Foundation\\Application::\$app->db;
-
-        \$sql = "ALTER TABLE `{$tableName}` DROP COLUMN `{$columnName}`";
-
-        try {
-            \$db->pdo->exec(\$sql);
-            echo "Column '{$columnName}' removed from '{$tableName}' successfully\\n";
-        } catch (\\Exception \$e) {
-            throw new \\Exception("Migration failed: " . \$e->getMessage());
-        }
+        // Drop column using raw SQL
+        \$this->db->execute("ALTER TABLE {$tableName} DROP COLUMN {$column}");
     }
-
-    /**
-     * Reverse the migration
-     */
-    public function down()
+    
+    public function down(): void
     {
-        // Here you would need to know the original column definition
-        // This is just a placeholder - you should update this with the actual column definition
+        // You need to know the column definition to add it back
+        // This is a placeholder - update with the actual column definition
         \$columnType = "VARCHAR(255)";
+        \$this->db->execute("ALTER TABLE {$tableName} ADD COLUMN {$column} {$columnType}");
+    }
+}
+PHP;
+    }
 
-        \$db = \\Luxid\\Foundation\\Application::\$app->db;
+    private function alterTableTemplate(string $className): string
+    {
+        return <<<PHP
+<?php
 
-        \$sql = "ALTER TABLE `{$tableName}` ADD COLUMN `{$columnName}` {$columnType}";
+use Rocket\Migration\Migration;
+use Rocket\Migration\Rocket;
 
-        try {
-            \$db->pdo->exec(\$sql);
-            echo "Column '{$columnName}' added back to '{$tableName}' successfully\\n";
-        } catch (\\Exception \$e) {
-            throw new \\Exception("Rollback failed: " . \$e->getMessage());
-        }
+class {$className} extends Migration
+{
+    public function up(): void
+    {
+        // Write your migration logic here
+        // Example: Modify column, rename table, etc.
+        
+        // Using raw SQL
+        // \$this->db->execute("ALTER TABLE table_name MODIFY COLUMN column_name NEW_TYPE");
+        
+        // Or use Rocket's schema builder for new tables only
+    }
+    
+    public function down(): void
+    {
+        // Rollback your changes
+        // \$this->db->execute("ALTER TABLE table_name MODIFY COLUMN column_name OLD_TYPE");
+    }
+}
+PHP;
+    }
+
+    private function genericTemplate(string $className): string
+    {
+        return <<<PHP
+<?php
+
+use Rocket\Migration\Migration;
+use Rocket\Migration\Rocket;
+
+class {$className} extends Migration
+{
+    public function up(): void
+    {
+        // Write your migration logic here
+        // Example: \$this->db->execute("CREATE TABLE ...");
+        // Example: Rocket::table('table_name', function(\$column) { ... });
+    }
+    
+    public function down(): void
+    {
+        // Rollback your migration logic here
+        // Example: \$this->db->execute("DROP TABLE ...");
     }
 }
 PHP;
@@ -274,29 +240,25 @@ PHP;
     {
         // Simple type guessing based on column name
         if (strpos($columnName, 'email') !== false) {
-            return "VARCHAR(255)";
+            return 'string';
         } elseif (strpos($columnName, 'password') !== false) {
-            return "VARCHAR(255)";
+            return 'string';
         } elseif (strpos($columnName, 'name') !== false) {
-            return "VARCHAR(255)";
+            return 'string';
         } elseif (strpos($columnName, 'description') !== false) {
-            return "TEXT";
-        } elseif (strpos($columnName, 'content') !== false) {
-            return "TEXT";
-        } elseif (strpos($columnName, 'amount') !== false || strpos($columnName, 'price') !== false) {
-            return "DECIMAL(10,2)";
-        } elseif (strpos($columnName, 'quantity') !== false) {
-            return "INT";
+            return 'text';
+        elseif (strpos($columnName, 'content') !== false) {
+            return 'text';
+        } elseif (strpos($columnName, 'price') !== false || strpos($columnName, 'amount') !== false) {
+            return 'decimal';
+        } elseif (strpos($columnName, 'quantity') !== false || strpos($columnName, 'count') !== false) {
+            return 'integer';
         } elseif (strpos($columnName, 'is_') === 0 || strpos($columnName, 'has_') === 0) {
-            return "TINYINT(1) DEFAULT 0";
+            return 'boolean';
         } elseif (strpos($columnName, 'date') !== false) {
-            return "DATE";
-        } elseif (strpos($columnName, 'time') !== false) {
-            return "TIME";
-        } elseif (strpos($columnName, 'at') !== false) {
-            return "TIMESTAMP NULL DEFAULT NULL";
+            return 'datetime';
         } else {
-            return "VARCHAR(255)";
+            return 'string';
         }
     }
 
