@@ -57,7 +57,7 @@ class {$className} extends LuxidAction
     public function index()
     {
         // Your action logic here
-        return \Response::success([
+        return Response::success([
           'message' => 'Action executed successfully'
         ]);
     }
