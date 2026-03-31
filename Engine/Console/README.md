@@ -1,6 +1,6 @@
 # Juice CLI Commands Reference
 
-## 🚀 Server Commands
+## Server Commands
 
 ### `php juice start`
 Start the development server.
@@ -13,7 +13,7 @@ Start the development server.
 Fresh install - clears cache, runs migrations, and seeds database.
 - **Use:** When setting up a new project or resetting everything
 
-## 📊 Application Commands
+## Application Commands
 
 ### `php juice status`
 Check application status and environment.
@@ -32,7 +32,7 @@ Validate environment configuration.
 Show version information.
 - **Shows:** Juice CLI version, Luxid Engine version, PHP version, OS info
 
-## 🗄️ Database Commands
+## Database Commands
 
 ### `php juice db:create`
 Create a new database based on .env configuration.
@@ -68,7 +68,7 @@ Rollback the last migration.
 Refresh database - rollback all and migrate again.
 - **Equivalent:** `db:rollback --step=all` + `db:migrate`
 
-## ⚡ Make Commands (Code Generation)
+## Make Commands (Code Generation)
 
 ### `php juice make:action <name>`
 Create a new Action class.
@@ -109,7 +109,7 @@ Generate a complete API CRUD for a resource.
 - **Creates:** Complete REST API with CRUD operations
 - **Example:** `php juice make:api Product`
 
-## ❓ Help Commands
+## Help Commands
 
 ### `php juice help`
 Show general help and command list.
@@ -121,10 +121,11 @@ Show detailed help for a specific command.
 - **Shows:** Command description, usage, options, and examples
 - **Example:** `php juice help make:action`
 
-## 📁 Directory Structure Created
+## Directory Structure Created
 
 When using Juice CLI, it creates/maintains this structure:
 
+```text
 project/
 ├── app/
 │   ├── Actions/          # Action classes
@@ -136,8 +137,9 @@ project/
 ├── seeds/              # Database seeders
 ├── web/                # Public web files
 └── .env                # Environment variables
+```
 
-## 🎯 Quick Start Examples
+## Quick Start Examples
 
 ### Start a new project:
 ```bash
