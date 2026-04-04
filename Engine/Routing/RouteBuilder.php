@@ -114,14 +114,14 @@ class RouteBuilder
 
     if (isset(Application::$app) && Application::$app->auth) {
       $authManager = Application::$app->auth;
-    } elseif (class_exists('Luxid\Sentinel\Sentinel')) {
+    } elseif (class_exists('Luxid\Haven\Haven')) {
       try {
-        $sentinelClass = 'Luxid\Sentinel\Sentinel';
-        if (method_exists($sentinelClass, 'getManager')) {
-          $authManager = $sentinelClass::getManager();
+        $havenClass = 'Luxid\Haven\Haven';
+        if (method_exists($havenClass, 'getManager')) {
+          $authManager = $havenClass::getManager();
         }
       } catch (\Exception $e) {
-        // Sentinel not initialized
+        // Haven not initialized
       }
     }
 

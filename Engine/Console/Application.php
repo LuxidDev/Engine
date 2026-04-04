@@ -22,7 +22,7 @@ use Luxid\Console\Commands\{
   EnvCheckCommand,
   VersionCommand,
   HelpCommand,
-  SentinelInstallBridge,
+  HavenInstallBridge,
   MakeNovaComponentCommand,
   MakeNovaPageCommand,
   MakeNovaLayoutCommand,
@@ -64,7 +64,7 @@ class Application
       'env:check' => EnvCheckCommand::class,
       'version' => VersionCommand::class,
       'help' => HelpCommand::class,
-      'sentinel:install' => SentinelInstallBridge::class,
+      'haven:install' => HavenInstallBridge::class,
       'make:nova:component' => MakeNovaComponentCommand::class,
       'make:nova:page' => MakeNovaPageCommand::class,
       'make:nova:layout' => MakeNovaLayoutCommand::class,
@@ -188,9 +188,9 @@ class Application
       }
     }
 
-    // Add Sentinel command if it exists in core commands
-    if (isset($commands['sentinel:install'])) {
-      $menu[] = ["🔐", "sentinel:install", "Install Sentinel authentication package"];
+    // Add Haven command if it exists in core commands
+    if (isset($commands['haven:install'])) {
+      $menu[] = ["🔐", "haven:install", "Install Haven authentication package"];
     }
 
     $menu = array_merge($menu, [
@@ -229,9 +229,9 @@ class Application
       'Make' => array_filter(array_keys($commands), fn($c) => str_starts_with($c, 'make:')),
     ];
 
-    // Add Sentinel command to its own category
-    if (isset($commands['sentinel:install'])) {
-      $categories['Authentication'] = ['sentinel:install'];
+    // Add Haven command to its own category
+    if (isset($commands['haven:install'])) {
+      $categories['Authentication'] = ['haven:install'];
     }
 
     // Add package commands category
@@ -240,7 +240,7 @@ class Application
       fn($c) => !isset($this->commands[$c]) &&
         !str_starts_with($c, 'db:') &&
         !str_starts_with($c, 'make:') &&
-        $c !== 'sentinel:install'
+        $c !== 'haven:install'
     );
 
     if (!empty($packageCommands)) {
