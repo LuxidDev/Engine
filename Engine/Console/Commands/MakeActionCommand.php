@@ -6,7 +6,7 @@ use Luxid\Console\Command;
 
 class MakeActionCommand extends Command
 {
-    protected string $description = 'Create a new Action class';
+    protected string $description = 'Create a new Action class with Loco-style routing';
 
     public function handle(array $argv): int
     {
@@ -23,17 +23,18 @@ class MakeActionCommand extends Command
         $actionNamespace = $this->getNamespaceFromPath($actionPath);
         $actionClass = basename($actionName, '.php');
 
-        // Determine if this is an API or Web action based on command or naming
-        $isApi = str_contains($actionName, 'Api') || $actionName === 'ApiAction' || $this->options['api'] ?? false;
+        // Determine if this is an API or Web action
+        $isApi = str_contains($actionName, 'Api') || $this->options['api'] ?? false;
 
-        // Create the action file
         $content = $this->generateActionContent($actionNamespace, $actionClass, $isApi);
 
         if ($this->createFile($actionPath, $content)) {
             $this->info("Action created: app/Actions/{$actionName}.php");
 
-            // Automatically register in the appropriate routes file
-            $this->registerInRoutes($actionClass, $isApi);
+            // Ask if they want to register it
+            if ($this->confirm('Do you want to register this action in routes file?', true)) {
+                $this->registerInRoutes($actionClass, $isApi);
+            }
 
             return 0;
         }
@@ -43,13 +44,13 @@ class MakeActionCommand extends Command
 
     private function generateActionContent(string $namespace, string $className, bool $isApi): string
     {
-        $methodTemplate = $isApi ?
-            'return Response::success([\'message\' => \'' . strtolower($className) . ' executed successfully\']);' :
+        $methodExample = $isApi ?
+            'return Response::success([\'message\' => \'Your logic here\']);' :
             'return Nova::render(\'Welcome\', [\'title\' => \'' . $className . '\']);';
 
         $useStatements = $isApi ?
-            "use Luxid\Nodes\Response;\nuse App\Entities\User;" :
-            "use Luxid\Nodes\Nova;";
+            "use Luxid\Nodes\Response;\nuse Luxid\Routing\Routes;" :
+            "use Luxid\Nodes\Nova;\nuse Luxid\Routing\Routes;";
 
         $routesMethod = $this->generateRoutesMethod($className, $isApi);
 
@@ -58,7 +59,7 @@ class MakeActionCommand extends Command
 
 namespace {$namespace};
 
-use Luxid\Foundation\Action;
+use App\Actions\LuxidAction;
 {$useStatements}
 
 class {$className} extends LuxidAction
@@ -67,7 +68,7 @@ class {$className} extends LuxidAction
 
     public function index()
     {
-        {$methodTemplate}
+        {$methodExample}
     }
 }
 
@@ -76,29 +77,29 @@ PHP;
 
     private function generateRoutesMethod(string $className, bool $isApi): string
     {
-        $methodName = strtolower($className);
+        $methodName = strtolower(str_replace('Action', '', $className));
         $path = $isApi ? "/api/{$methodName}" : "/{$methodName}";
 
         if ($isApi) {
             return <<<'PHP'
-    public static function routes(): \Luxid\Routing\Routes
+    public static function routes(): Routes
     {
-        return \Luxid\Routing\Routes::new()
+        return Routes::new()
             ->prefix('api')
-            ->add('/RESOURCE_NAME_HERE', get('index'))
-            ->add('/RESOURCE_NAME_HERE/{id}', get('show'))
-            ->add('/RESOURCE_NAME_HERE', post('store'))
-            ->add('/RESOURCE_NAME_HERE/{id}', put('update'))
-            ->add('/RESOURCE_NAME_HERE/{id}', delete('destroy'));
+            ->add('/RESOURCE_NAME', get('index'))
+            ->add('/RESOURCE_NAME/{id}', get('show'))
+            ->add('/RESOURCE_NAME', post('store'))
+            ->add('/RESOURCE_NAME/{id}', put('update'))
+            ->add('/RESOURCE_NAME/{id}', delete('destroy'));
     }
 PHP;
         }
 
         return <<<PHP
-    public static function routes(): \Luxid\Routing\Routes
+    public static function routes(): Routes
     {
-        return \Luxid\Routing\Routes::new()
-            ->add('/{$methodName}', get('index'));
+        return Routes::new()
+            ->add('/', get('index'));
     }
 PHP;
     }
@@ -109,51 +110,31 @@ PHP;
             $this->getProjectRoot() . '/routes/api.php' :
             $this->getProjectRoot() . '/routes/web.php';
 
-        $registrationLine = "{$className}::routes()->register();";
+        $registrationLine = "{$className}::routes()->register({$className}::class);";
+        $useStatement = "use App\\Actions\\{$className};";
 
         if (!file_exists($routesFile)) {
-            // Create routes file if it doesn't exist
-            $content = $isApi ?
-                "<?php\n\n// API Routes\n\nuse App\\Actions\\{$className};\n\n{$registrationLine}\n" :
-                "<?php\n\n// Web Routes\n\nuse App\\Actions\\{$className};\n\n{$registrationLine}\n";
-
+            $content = "<?php\n\n{$useStatement}\n\n{$registrationLine}\n";
             file_put_contents($routesFile, $content);
             $this->info("Created routes file and registered {$className}");
             return;
         }
 
-        // Read existing routes file
         $content = file_get_contents($routesFile);
 
-        // Check if already registered
         if (strpos($content, $registrationLine) !== false) {
-            $this->warning("{$className} already registered in routes file");
+            $this->warning("{$className} already registered");
             return;
         }
 
-        // Check if the use statement exists
-        $useStatement = "use App\\Actions\\{$className};";
-
         if (strpos($content, $useStatement) === false) {
-            // Add use statement after opening PHP tag
-            $content = preg_replace(
-                '/^<\?php/',
-                "<?php\n\n{$useStatement}",
-                $content,
-                1
-            );
+            $content = preg_replace('/^<\?php/', "<?php\n\n{$useStatement}", $content, 1);
         }
 
-        // Add registration line before the last line or at the end
-        if (strpos($content, "// Auto-registered actions") !== false) {
-            // There's a section for auto-registered actions
-            $content = preg_replace(
-                '/\/\/ Auto-registered actions/',
-                "// Auto-registered actions\n{$registrationLine}",
-                $content
-            );
+        // Add registration before the last ?>
+        if (strpos($content, '?>') !== false) {
+            $content = str_replace('?>', "{$registrationLine}\n\n?>", $content);
         } else {
-            // Add at the end of the file
             $content = rtrim($content) . "\n\n{$registrationLine}\n";
         }
 

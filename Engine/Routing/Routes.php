@@ -48,13 +48,46 @@ class Routes
         return $this;
     }
 
-    public function register(): void
+    public function register(?string $actionClass = null): void
     {
+        if (!$actionClass) {
+            throw new \RuntimeException(
+                'Action class required. Use: ActionClass::routes()->register(ActionClass::class)'
+            );
+        }
+
         if (!Application::$app) {
             throw new \RuntimeException('Application not initialized');
         }
 
         $router = Application::$app->router;
+
+        // If action class not provided, try to determine it from the call stack
+        if ($actionClass === null) {
+            $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3);
+
+            // Look for the class that called register
+            for ($i = 1; $i < count($trace); $i++) {
+                if (isset($trace[$i]['class']) &&
+                    $trace[$i]['class'] !== __CLASS__ &&
+                    $trace[$i]['class'] !== 'Luxid\\Routing\\Routes') {
+                    $actionClass = $trace[$i]['class'];
+                    break;
+                }
+            }
+
+            // If still not found, check the previous frame
+            if ($actionClass === null && isset($trace[2]['class'])) {
+                $actionClass = $trace[2]['class'];
+            }
+        }
+
+        if (!$actionClass) {
+            throw new \RuntimeException(
+                'Could not determine action class for route registration. ' .
+                'Please pass the action class explicitly: ActionClass::routes()->register(ActionClass::class)'
+            );
+        }
 
         foreach ($this->routes as $route) {
             // Build full path
@@ -63,14 +96,6 @@ class Routes
                 $fullPath = rtrim($this->prefix, '/') . '/' . ltrim($route['path'], '/');
             }
             $fullPath = '/' . ltrim($fullPath, '/');
-
-            // Get the action class from the calling class
-            $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2);
-            $actionClass = $trace[1]['class'] ?? null;
-
-            if (!$actionClass) {
-                throw new \RuntimeException('Could not determine action class for route registration');
-            }
 
             // Register with router
             call_user_func([$router, $route['method']], $fullPath, [$actionClass, $route['handler']]);

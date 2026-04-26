@@ -6,14 +6,14 @@ use Luxid\Console\Command;
 
 class MakeApiCommand extends Command
 {
-    protected string $description = 'Create a new API Action class with CRUD operations';
+    protected string $description = 'Create a new API Action with full CRUD operations';
 
     public function handle(array $argv): int
     {
         $this->parseArguments($argv);
 
         if (empty($this->args)) {
-            $this->error('Please provide an API name');
+            $this->error('Please provide an API resource name');
             $this->line('Usage: php juice make:api <ResourceName>');
             return 1;
         }
@@ -23,14 +23,14 @@ class MakeApiCommand extends Command
         $actionPath = $this->getAppPath() . '/Actions/' . $actionName . '.php';
         $actionNamespace = $this->getNamespaceFromPath($actionPath);
 
-        // Create the action file with full CRUD
         $content = $this->generateApiActionContent($actionNamespace, $resourceName);
 
         if ($this->createFile($actionPath, $content)) {
             $this->info("API Action created: app/Actions/{$actionName}.php");
 
-            // Automatically register in api.php
-            $this->registerInApiRoutes($actionName);
+            if ($this->confirm('Do you want to register this action in routes/api.php?', true)) {
+                $this->registerInApiRoutes($actionName);
+            }
 
             return 0;
         }
@@ -41,22 +41,22 @@ class MakeApiCommand extends Command
     private function generateApiActionContent(string $namespace, string $resourceName): string
     {
         $resourceLower = strtolower($resourceName);
-        $entityName = $resourceName;
 
         return <<<PHP
 <?php
 
 namespace {$namespace};
 
-use Luxid\Foundation\Action;
+use App\Actions\LuxidAction;
 use Luxid\Nodes\Response;
-use App\Entities\\{$entityName};
+use Luxid\Routing\Routes;
+use App\Entities\\{$resourceName};
 
 class {$resourceName}Action extends LuxidAction
 {
-    public static function routes(): \Luxid\Routing\Routes
+    public static function routes(): Routes
     {
-        return \Luxid\Routing\Routes::new()
+        return Routes::new()
             ->prefix('api')
             ->add('/{$resourceLower}', get('index'))
             ->add('/{$resourceLower}/{id}', get('show'))
@@ -67,11 +67,10 @@ class {$resourceName}Action extends LuxidAction
 
     /**
      * GET /api/{$resourceLower}
-     * List all resources
      */
     public function index(): string
     {
-        \$resources = {$entityName}::all();
+        \$resources = {$resourceName}::all();
         return Response::success([
             '{$resourceLower}' => \$resources,
             'count' => count(\$resources)
@@ -80,11 +79,10 @@ class {$resourceName}Action extends LuxidAction
 
     /**
      * GET /api/{$resourceLower}/{id}
-     * Show a specific resource
      */
     public function show(int \$id): string
     {
-        \$resource = {$entityName}::find(\$id);
+        \$resource = {$resourceName}::find(\$id);
 
         if (!\$resource) {
             return Response::error('{$resourceName} not found', null, 404);
@@ -95,14 +93,14 @@ class {$resourceName}Action extends LuxidAction
 
     /**
      * POST /api/{$resourceLower}
-     * Create a new resource
      */
     public function store(): string
     {
         \$data = \$this->request()->input();
 
-        \$resource = new {$entityName}();
-        // TODO: Map data to entity properties
+        \$resource = new {$resourceName}();
+        // Map your fields here
+        // \$resource->field = \$data['field'] ?? '';
 
         if (\$resource->save()) {
             return Response::success(['{$resourceLower}' => \$resource], 201);
@@ -113,18 +111,18 @@ class {$resourceName}Action extends LuxidAction
 
     /**
      * PUT /api/{$resourceLower}/{id}
-     * Update a resource
      */
     public function update(int \$id): string
     {
-        \$resource = {$entityName}::find(\$id);
+        \$resource = {$resourceName}::find(\$id);
 
         if (!\$resource) {
             return Response::error('{$resourceName} not found', null, 404);
         }
 
         \$data = \$this->request()->input();
-        // TODO: Update entity properties from \$data
+        // Update your fields here
+        // \$resource->field = \$data['field'] ?? \$resource->field;
 
         if (\$resource->save()) {
             return Response::success(['{$resourceLower}' => \$resource]);
@@ -135,11 +133,10 @@ class {$resourceName}Action extends LuxidAction
 
     /**
      * DELETE /api/{$resourceLower}/{id}
-     * Delete a resource
      */
     public function destroy(int \$id): string
     {
-        \$resource = {$entityName}::find(\$id);
+        \$resource = {$resourceName}::find(\$id);
 
         if (!\$resource) {
             return Response::error('{$resourceName} not found', null, 404);
@@ -156,12 +153,11 @@ PHP;
     private function registerInApiRoutes(string $actionName): void
     {
         $routesFile = $this->getProjectRoot() . '/routes/api.php';
-        $registrationLine = "{$actionName}::routes()->register();";
+        $registrationLine = "{$actionName}::routes()->register({$actionName}::class);";
         $useStatement = "use App\\Actions\\{$actionName};";
 
         if (!file_exists($routesFile)) {
-            // Create routes file if it doesn't exist
-            $content = "<?php\n\n// API Routes\n\n{$useStatement}\n\n{$registrationLine}\n";
+            $content = "<?php\n\n{$useStatement}\n\n{$registrationLine}\n";
             file_put_contents($routesFile, $content);
             $this->info("Created routes/api.php and registered {$actionName}");
             return;
@@ -169,34 +165,20 @@ PHP;
 
         $content = file_get_contents($routesFile);
 
-        // Check if already registered
         if (strpos($content, $registrationLine) !== false) {
-            $this->warning("{$actionName} already registered in routes/api.php");
+            $this->warning("{$actionName} already registered");
             return;
         }
 
-        // Add use statement if not present
         if (strpos($content, $useStatement) === false) {
-            $content = preg_replace(
-                '/^<\?php/',
-                "<?php\n\n{$useStatement}",
-                $content,
-                1
-            );
+            $content = preg_replace('/^<\?php/', "<?php\n\n{$useStatement}", $content, 1);
         }
 
-        // Create a section for API routes if it doesn't exist
-        if (strpos($content, "// API Routes") === false) {
-            $content = preg_replace(
-                '/^<\?php/',
-                "<?php\n\n// API Routes\n",
-                $content,
-                1
-            );
+        if (strpos($content, '?>') !== false) {
+            $content = str_replace('?>', "{$registrationLine}\n\n?>", $content);
+        } else {
+            $content = rtrim($content) . "\n\n{$registrationLine}\n";
         }
-
-        // Add registration line
-        $content = rtrim($content) . "\n\n{$registrationLine}\n";
 
         file_put_contents($routesFile, $content);
         $this->info("Registered {$actionName} in routes/api.php");
