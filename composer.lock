@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "1ce6aa217f679f23b0d733fbae45fc9a",
+    "content-hash": "8b3f9d393291f0f57065c8307e226c7b",
     "packages": [
         {
             "name": "fakerphp/faker",
@@ -133,16 +133,16 @@
         },
         {
             "name": "luxid/rocket",
-            "version": "v0.2.0",
+            "version": "v0.2.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/LuxidDev/Rocket-ORM.git",
-                "reference": "a87aba0e027fdcdbbfb7d06e849a07bb9c09c8b8"
+                "reference": "eb413f191787b69f6d488a90849e3c79c3daaa5d"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/LuxidDev/Rocket-ORM/zipball/a87aba0e027fdcdbbfb7d06e849a07bb9c09c8b8",
-                "reference": "a87aba0e027fdcdbbfb7d06e849a07bb9c09c8b8",
+                "url": "https://api.github.com/repos/LuxidDev/Rocket-ORM/zipball/eb413f191787b69f6d488a90849e3c79c3daaa5d",
+                "reference": "eb413f191787b69f6d488a90849e3c79c3daaa5d",
                 "shasum": ""
             },
             "require": {
@@ -182,9 +182,9 @@
             ],
             "support": {
                 "issues": "https://github.com/LuxidDev/Rocket-ORM/issues",
-                "source": "https://github.com/LuxidDev/Rocket-ORM/tree/v0.2.0"
+                "source": "https://github.com/LuxidDev/Rocket-ORM/tree/v0.2.1"
             },
-            "time": "2026-05-16T21:40:15+00:00"
+            "time": "2026-05-17T08:11:27+00:00"
         },
         {
             "name": "phpoption/phpoption",
