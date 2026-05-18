@@ -12,7 +12,8 @@
   "autoload": {
     "psr-4": {
       "Luxid\\": "Engine/",
-      "Luxid\\Console\\": "Engine/Console/"
+      "Luxid\\Console\\": "Engine/Console/",
+      "Luxid\\FrankenPHP\\": "Engine/FrankenPHP/"
     },
     "files": [
       "Engine/helpers.php"
