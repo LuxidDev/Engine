@@ -29,6 +29,8 @@ use Luxid\Console\Commands\{
     MakeSeederCommand,
     MakeFactoryCommand,
     SeedCommand,
+    FrankenInstallCommand,
+    FrankenServeCommand
 };
 
 class Application
@@ -71,6 +73,8 @@ class Application
             'seed' => SeedCommand::class,
             'make:seeder' => MakeSeederCommand::class,
             'make:factory' => MakeFactoryCommand::class,
+            'franken:install' => FrankenInstallCommand::class,
+            'franken:serve' => FrankenServeCommand::class,
         ];
     }
 
