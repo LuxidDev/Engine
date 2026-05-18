@@ -107,6 +107,7 @@ class Application
             }
         }
     }
+
     public function registerAuth(AuthManager $auth): void
     {
         $this->auth = $auth;
@@ -120,53 +121,47 @@ class Application
     public function run()
     {
         try {
-            echo $this->router->resolve();
+            return $this->router->resolve();
         } catch (\Exception $e) {
-            // Get the exception code and ensure it's a valid HTTP status code
-            $code = $e->getCode();
-
-            // Convert to integer if needed
-            if (!is_int($code)) {
-                $code = (int) $code;
-            }
-
-            // Validate it's a proper HTTP status code (100-599)
-            if ($code < 100 || $code > 599) {
-                // For PDOExceptions and other non-HTTP exceptions, use 500
-                if ($e instanceof \PDOException) {
-                    $code = 500; // Internal Server Error for database issues
-                } else {
-                    $code = $e instanceof \Luxid\Exceptions\NotFoundException ? 404 : 500;
-                }
-            }
-
-            $this->response->setStatusCode($code);
-
-            // Check if this is an API request
-            $path = $this->request->getPath();
-            $acceptHeader = $_SERVER['HTTP_ACCEPT'] ?? '';
-            $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
-
-            $isApiRequest = strpos($path, '/api/') === 0
-              || strpos($acceptHeader, 'application/json') !== false
-              || strpos($contentType, 'application/json') !== false;
-
-            if ($isApiRequest) {
-                // Return JSON error for API requests
-                header('Content-Type: application/json');
-                echo json_encode([
-                    'success' => false,
-                    'message' => $e->getMessage(),
-                    'error' => $e->getMessage(),
-                    'code' => $code,
-                ]);
-            } else {
-                // Return HTML error for web requests
-                echo $this->screen->renderScreen('_error', [
-                    'exception' => $e,
-                ]);
-            }
+            return $this->handleException($e);
         }
+    }
+
+    protected function handleException(\Exception $e): string
+    {
+        $code = $this->getHttpCode($e);
+        $this->response->setStatusCode($code);
+
+        $path = $this->request->getPath();
+        $isApiRequest = strpos($path, '/api/') === 0;
+
+        if ($isApiRequest) {
+            return json_encode([
+                'success' => false,
+                'message' => $e->getMessage(),
+                'code' => $code,
+            ]);
+        }
+
+        return $this->screen->renderScreen('_error', ['exception' => $e]);
+    }
+
+    protected function getHttpCode(\Exception $e): int
+    {
+        $code = $e->getCode();
+
+        if (!is_int($code)) {
+            $code = (int) $code;
+        }
+
+        if ($code < 100 || $code > 599) {
+            if ($e instanceof \PDOException) {
+                return 500;
+            }
+            return $e instanceof \Luxid\Exceptions\NotFoundException ? 404 : 500;
+        }
+
+        return $code;
     }
 
     // getter | setter ==================================
@@ -187,7 +182,7 @@ class Application
         $primaryKey = $user->primaryKey();
         $primaryValue = $user->{$primaryKey};
 
-        $this->session->set('user', $primaryValue);
+        $this->getSession()->set('user', $primaryValue);
 
         return true;
     }
@@ -195,7 +190,7 @@ class Application
     public function logout()
     {
         $this->user = null;
-        $this->session->remove('user');
+        $this->getSession()->remove('user');
     }
 
     public function getSession(): SessionInterface

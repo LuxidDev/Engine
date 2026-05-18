@@ -6,14 +6,33 @@ use Luxid\Foundation\Application;
 
 class Response
 {
+    protected int $statusCode = 200;
+    protected array $headers = [];
+
     public function setStatusCode(int $code)
     {
-        http_response_code($code);
+        $this->statusCode = $code;
+    }
+
+    public function getStatusCode(): int
+    {
+        return $this->statusCode;
+    }
+
+    public function setHeader(string $name, string $value): void
+    {
+        $this->headers[$name] = $value;
+    }
+
+    public function getHeaders(): array
+    {
+        return $this->headers;
     }
 
     public function warp(string $url)
     {
-        header('Location: ' . $url);
+        $this->setHeader('Location', $url);
+        $this->setStatusCode(302);
     }
 
     /**
@@ -22,7 +41,7 @@ class Response
     public function json($data, int $statusCode = 200): string
     {
         $this->setStatusCode($statusCode);
-        header('Content-Type: application/json');
+        $this->setHeader('Content-Type', 'application/json');
         return json_encode($data, JSON_PRETTY_PRINT);
     }
 
@@ -58,6 +77,10 @@ class Response
         if (Application::$app) {
             Application::$app->session->setFlash($key, $message);
         }
-        $this->warp($url);
+
+        $this->setHeader('Location', $url);
+        $this->setStatusCode(302);
+
+        return $this->json(['redirect' => $url], 302);
     }
 }

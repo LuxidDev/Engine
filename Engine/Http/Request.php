@@ -14,22 +14,50 @@ class Request
      */
     private ?array $cachedQuery = null;
 
+    protected string $customPath = '';
+    protected string $customMethod = '';
+    protected string $customBody = '';
+    protected array $customHeaders = [];
+
+    public function setPath(string $path): void
+    {
+        $this->customPath = $path;
+    }
+
+    public function setMethod(string $method): void
+    {
+        $this->customMethod = $method;
+    }
+
+    public function setBody(string $body): void
+    {
+        $this->customBody = $body;
+        $this->cachedBody = json_decode($body, true);
+    }
+
+    public function setHeader(string $name, string $value): void
+    {
+        $this->customHeaders[$name] = $value;
+    }
+
     public function getPath()
     {
+        if ($this->customPath) {
+            return $this->customPath;
+        }
+        // Fallback to superglobals for PHP-FPM
         $path = $_SERVER["REQUEST_URI"] ?? '/';
         $position = strpos($path, '?');
-
-        if ($position === false) {
-            return $path;
-        }
-
-        return substr($path, 0, $position);
+        return $position === false ? $path : substr($path, 0, $position);
     }
 
     public function method()
     {
-        // Support method override via _method parameter
-        $method = strtolower($_SERVER['REQUEST_METHOD']);
+        if ($this->customMethod) {
+            return $this->customMethod;
+        }
+        // Fallback for PHP-FPM
+        $method = strtolower($_SERVER['REQUEST_METHOD'] ?? 'get');
 
         // Check for method overrid in POST data
         if ($method === 'post' && isset($_POST['method'])) {
