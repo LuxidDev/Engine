@@ -6,7 +6,7 @@ use Luxid\Foundation\Application;
 
 class Adapter
 {
-    private $app;
+    public $app;
 
     public function __construct(string $rootPath, array $config)
     {
@@ -23,7 +23,7 @@ class Adapter
      */
     public function getHandler(): callable
     {
-        return function($request) {
+        return function ($request) {
             return $this->handle($request);
         };
     }
@@ -80,3 +80,4 @@ class Adapter
         return $luxidReq;
     }
 }
+
