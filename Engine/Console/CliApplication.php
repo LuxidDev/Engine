@@ -3,12 +3,14 @@
 namespace Luxid\Console;
 
 use Luxid\Foundation\Application;
+use Rocket\Connection\Connection;
+use Luxid\Database\DbEntity;
 
 class CliApplication extends Application
 {
-    // Override the typed properties to be nullable
-    public ?\Luxid\Database\Database $db = null;
-    public ?\Luxid\Database\DbEntity $user = null;
+    // Fix these property types to match parent class
+    public ?Connection $db = null;
+    public ?DbEntity $user = null;
 
     public function __construct($rootPath, array $config)
     {
@@ -37,7 +39,7 @@ class CliApplication extends Application
         return true;
     }
 
-    public function login(\Luxid\Database\DbEntity $user): bool
+    public function login(DbEntity $user): bool
     {
         // No-op in CLI
         return true;
