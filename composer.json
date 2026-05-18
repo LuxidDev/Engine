@@ -12,7 +12,7 @@
   "autoload": {
     "psr-4": {
       "Luxid\\": "Engine/",
-      "Luxid\\Console\\": "Engine/Console/",
+      "Luxid\\Console\\": "Engine/Console/"
     },
     "files": [
       "Engine/helpers.php"
