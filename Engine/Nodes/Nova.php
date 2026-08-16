@@ -47,6 +47,8 @@ class Nova
             return self::screen()->renderScreen($view, $data);
         }
 
+        self::assertComponentExists($view, $type);
+
         if ($type !== 'pages') {
             return self::renderComponent($view, $data, $type);
         }
@@ -85,6 +87,33 @@ class Nova
         }
 
         return \Luxid\Nova\ComponentManager::has(self::qualify($name, $type));
+    }
+
+    /**
+     * Fail with a message naming the component and where it should live.
+     *
+     * Without this the render fell through to the legacy screen renderer, which
+     * reported a missing file rather than a missing component.
+     *
+     * @param string $name Component name, dot notation permitted
+     * @param string $type Component directory
+     *
+     * @throws \RuntimeException When the component is not registered
+     */
+    protected static function assertComponentExists(string $name, string $type): void
+    {
+        if (\Luxid\Nova\ComponentManager::has(self::qualify($name, $type))) {
+            return;
+        }
+
+        throw new \RuntimeException(sprintf(
+            'Nova component "%s" is not registered. Create nova/%s/%s.nova.php, '
+                . 'or scaffold it with: php juice make:nova:page %s',
+            $name,
+            $type,
+            str_replace('.', '/', $name),
+            $name
+        ));
     }
 
     /**
