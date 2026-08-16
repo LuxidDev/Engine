@@ -15,98 +15,201 @@
 
 ## About Luxid
 
-> **Note:** This repository contains the core engine of the Luxid framework.
-> If you want to build an application using Luxid, starter templates and documentation will be provided in the future.
+This repository holds the core engine. To build an application, start from the
+[starter project](https://github.com/luxid/framework):
 
-**Luxid** is a modern, lightweight PHP framework designed with simplicity, speed, and architectural clarity in mind.
+```bash
+composer create-project luxid/framework my-app
+cd my-app
+php juice start
+```
 
-Rather than enforcing heavy abstractions, Luxid gives developers full control over how their applications are structured while still providing powerful tools for routing, request handling, and rendering.
+Luxid organises applications around **SEA**:
 
-Luxid introduces a clean architectural pattern called **SEA**:
+> **Screen (views) → Entities (models) → Actions (controllers)**
 
-> **Screen (Views) → Entities (Models) → Actions (Controllers)**
+An **Action** groups the handlers for one slice of the domain and declares its
+own routes, so a feature's dispatch table lives beside its behaviour instead of
+in a central file. Each handler is an *activity*.
 
-This structure keeps applications readable, maintainable, and easy to reason about—especially for developers interested in understanding framework internals.
+## Requirements
 
----
+PHP 8.1 or newer.
 
-## Why Luxid?
+## The pieces
 
-Web development should feel clear and enjoyable, not overwhelming.
+| Package | Role |
+|---|---|
+| `luxid/engine` | Routing, HTTP, kernel, `juice` CLI |
+| `luxid/rocket` | Attribute-driven ORM, migrations, seeding |
+| `luxid/nova` | Server-rendered reactive components |
+| `luxid/haven` | Session authentication |
 
-Luxid focuses on:
+Nova, Rocket and Haven are optional; the engine works without them.
 
-- Explicit and expressive routing
-- Action-based request handling
-- A simple, readable rendering system
-- Minimal setup with maximum flexibility
-- Transparent internals with no hidden magic
+## Actions and routes
 
-Luxid removes unnecessary complexity found in larger frameworks while preserving the features developers rely on daily.
+```php
+namespace App\Actions;
 
----
+use Luxid\Foundation\Action;
+use Luxid\Nodes\Response;
+use Luxid\Routing\Routes;
 
-## Key Features
+class TodoAction extends Action
+{
+    public static function routes(): Routes
+    {
+        return Routes::new()
+            ->prefix('api')
+            ->add('/todos', get('index'))
+            ->add('/todos/{id}', get('show'))
+            ->add('/todos', post('store'))
+            ->secure();
+    }
 
-- Fast and expressive routing engine
-- Action-based controllers (a cleaner alternative to classical MVC)
-- Lightweight Screen rendering system using `.nova.php`
-- Framework-level request sanitization
-- Extensible and modular architecture
-- Elegant and readable syntax
-- Zero-dependency core (Composer autoloading only)
+    public function index(): string
+    {
+        return Response::success(Todo::findAll());
+    }
 
----
+    public function show(string $id): string
+    {
+        return Response::success(Todo::find((int) $id));
+    }
+}
+```
 
-## Use Cases
+Register it in `routes/api.php`:
 
-Luxid is well suited for:
+```php
+use App\Actions\TodoAction;
 
-- Small to medium-sized web applications
-- APIs and backend services
-- Dashboards and admin panels
-- School and campus management systems
-- Learning and teaching modern PHP framework design
+TodoAction::routes()->register(TodoAction::class);
+```
 
----
+### Every route states its security
 
-## Learning Luxid
+A route collection must declare a posture before it registers, and registering
+without one throws at boot:
 
-Luxid is intentionally designed to be beginner-friendly, especially for developers learning how frameworks work internally.
+| Declaration | Effect |
+|---|---|
+| `->secure()` | Every activity requires authentication |
+| `->open(['login'])` | Every activity requires authentication except those named |
+| `->public()` | No activity requires authentication |
 
-Documentation and guides will be published soon in the `/docs` directory.
+This is the guarantee that makes an unprotected endpoint a startup error rather
+than something you discover in production. Console runs are exempt so
+`juice routes` can inspect an application whose routes are mid-refactor.
 
-Until then, you can explore the core structure:
+The fluent DSL carries the same rule:
 
-- `screens/` — application views and UI logic
-- `actions/` — request handlers and controllers
-- `entities/` — domain models
-- `system/` — framework core (Router, Request, Response, Engine)
+```php
+route('todos.index')->get('/todos')->uses(TodoAction::class, 'index')->secure();
+```
 
----
+### Route parameters
 
-## Contributing
+`{id}` matches one required segment and `{id?}` makes it optional. Paths are
+compiled to patterns once at registration, so matching does not re-parse them
+per request. Handlers may declare `Request` and `Response` parameters by type or
+by name; route parameters are matched by name and fall back to position.
 
-Thank you for considering contributing to Luxid.
+### Groups
 
-Contribution guidelines will be included in the documentation. In general:
+```php
+route_group(['prefix' => 'admin', 'auth' => true], function (): void {
+    route('admin.users')->get('/users')->uses(AdminAction::class, 'users')->register();
+});
+```
 
-- Follow PSR-12 coding standards
-- Submit pull requests with clear descriptions
-- Ensure new features are documented and tested
+Prefixes concatenate and middleware accumulates through nesting. Routes inside
+an `auth` group inherit it unless they declare their own posture or opt out with
+`withoutInheritance()`.
 
----
+## Requests and responses
 
-## Security Vulnerabilities
+```php
+$request->query('status', 'pending');   // query string only
+$request->input('title');               // body only
+$request->only(['title', 'body']);
+$request->except(['password']);
+$request->filled('title');
+$request->wantsJson();
+```
 
-If you discover a security vulnerability within Luxid, please report it responsibly.
+Input is sanitized on the way in. `_method` and `X-HTTP-Method-Override` are
+honoured on POST so HTML forms can issue PUT, PATCH and DELETE.
 
-**Email:** jhay@luxid.dev
+Actions **return** their body; the kernel flushes the status code, headers and
+body once the response is ready:
 
-All reports will be reviewed and addressed promptly.
+```php
+return Response::success($data);
+return Response::error('Not found', null, 404);
+return Response::warp('/login');
+```
 
----
+## Middleware
+
+```php
+use Luxid\Middleware\BaseMiddleware;
+
+class ThrottleMiddleware extends BaseMiddleware
+{
+    public function execute(): void
+    {
+        if ($tooManyRequests) {
+            throw new \Luxid\Exceptions\ForbiddenException('Slow down.');
+        }
+    }
+}
+```
+
+Middleware halts a request by throwing. Execution order is global → API global
+(for `/api/*` and JSON requests) → group → route → action.
+
+## Exceptions
+
+| Exception | Status |
+|---|---|
+| `NotFoundException` | 404 |
+| `MethodNotAllowedException` | 405, with an `Allow` header |
+| `UnauthorizedException` | 401 |
+| `ForbiddenException` | 403 |
+
+API requests get a JSON envelope; web requests render the `_error` screen.
+
+## The `juice` CLI
+
+```bash
+php juice start            # development server
+php juice routes           # inspect every registered route
+php juice make:action Todo
+php juice make:entity Todo
+php juice make:migration create_todos_table
+php juice migrate
+php juice seed
+php juice env:check
+php juice db:status
+```
+
+Packages contribute commands through `extra.luxid.commands` and providers
+through `extra.luxid.providers` in their composer.json; both are discovered
+automatically.
+
+## Testing
+
+```bash
+composer install
+composer test
+```
+
+## Security
+
+Report vulnerabilities to **jhay@luxid.dev**.
 
 ## License
 
-Luxid is open-source software licensed under the **MIT License**.
+MIT.
