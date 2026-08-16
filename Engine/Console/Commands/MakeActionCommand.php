@@ -131,7 +131,9 @@ PHP;
             $content = preg_replace('/^<\?php/', "<?php\n\n{$useStatement}", $content, 1);
         }
 
-        // Add registration before the last ?>
+        // Insert the registration before the file's closing tag, if it has one.
+        // (Written this way deliberately: a literal closing tag in a comment
+        // ends PHP mode, even inside a // comment.)
         if (strpos($content, '?>') !== false) {
             $content = str_replace('?>', "{$registrationLine}\n\n?>", $content);
         } else {
