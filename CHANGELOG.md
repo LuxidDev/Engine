@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.9.0
+
+Worker-mode support and production tuning.
+
+### Added
+
+- **`Luxid\Foundation\Preloader`** — compiles the application into opcache at
+  server start. Takes a cold request boot from ~700µs to ~105µs. The starter
+  ships a `preload.php` that uses it.
+- **`Luxid\Foundation\Worker`** — boots the application once and serves many
+  requests from the same process, removing per-request autoloading, provider
+  discovery, route registration and database connection. Measured at ~168,000
+  req/s against ~34,500 with per-request boot.
+- **`Luxid\Foundation\RequestScope`** — registry of state that must be cleared
+  between requests. Packages register a callback in their provider's `boot()`
+  rather than the engine reaching into them.
+- **`Application::prepareForNextRequest()`**, which runs the registry and
+  installs a fresh request and response.
+- **`juice optimize`** — rebuilds the package manifest, dumps a classmap
+  autoloader and reports which opcache settings are still costing you.
+- `Response::prettyPrintJson()` and a `pretty_json` config key.
+- A `cors` config key, so origins are configured rather than hardcoded.
+
+### Changed
+
+- **The FrankenPHP adapter was rewritten against the real API.** It previously
+  expected a PSR-7 style request object with `getUri()` and `getHeaders()` —
+  that is RoadRunner's model. FrankenPHP is the PHP SAPI: superglobals are
+  repopulated per request and output goes through `echo` and `header()`. The
+  old handler signature was never called by the runtime.
+- **JSON responses are compact by default**, pretty printed only when `debug`
+  is on. Pretty printing cost about a quarter more CPU and roughly tripled the
+  bytes on the wire.
+- `CliApplication` registers its request scope, matching the web kernel.
+
 ## 0.8.1
 
 Performance. No API removals; the additions are listed below.
