@@ -9,26 +9,6 @@
     "luxid",
     "mvc"
   ],
-  "autoload": {
-    "psr-4": {
-      "Luxid\\": "Engine/",
-      "Luxid\\Console\\": "Engine/Console/"
-    },
-    "files": [
-      "Engine/helpers.php"
-    ]
-  },
-  "bin": [
-    "juice"
-  ],
-  "scripts": {
-    "post-install-cmd": [
-      "chmod +x juice 2>/dev/null || true"
-    ],
-    "post-update-cmd": [
-      "chmod +x juice 2>/dev/null || true"
-    ]
-  },
   "authors": [
     {
       "name": "Jhay",
@@ -36,9 +16,40 @@
     }
   ],
   "require": {
-    "php": "^8.0",
+    "php": "^8.1",
     "vlucas/phpdotenv": "^5.6",
     "luxid/rocket": "^0.2.2"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^10.5 || ^11.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "Luxid\\": "Engine/"
+    },
+    "files": [
+      "Engine/helpers.php"
+    ]
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Luxid\\Tests\\": "tests/"
+    }
+  },
+  "bin": [
+    "juice"
+  ],
+  "scripts": {
+    "test": "phpunit",
+    "post-install-cmd": [
+      "chmod +x juice 2>/dev/null || true"
+    ],
+    "post-update-cmd": [
+      "chmod +x juice 2>/dev/null || true"
+    ]
+  },
+  "config": {
+    "sort-packages": true
   },
   "minimum-stability": "dev",
   "prefer-stable": true

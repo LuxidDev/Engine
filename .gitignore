@@ -1,4 +1,5 @@
-.php-cs-fixer.dist.php
-.php-cs-fixer.cache
 /vendor/
 /frankenphp
+/.phpunit.cache/
+.php-cs-fixer.cache
+.phpunit.result.cache
