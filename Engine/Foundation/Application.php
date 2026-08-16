@@ -261,11 +261,50 @@ class Application
             ], $code);
         }
 
-        return (string) $this->screen->renderScreen('_error', [
-            'exception' => $e,
-            'code' => $code,
-            'debug' => $this->debug,
-        ]);
+        try {
+            return (string) $this->screen->renderScreen('_error', [
+                'exception' => $e,
+                'code' => $code,
+                'debug' => $this->debug,
+            ]);
+        } catch (Throwable $renderFailure) {
+            // An error handler that throws is worse than a plain error page, so
+            // a missing or broken `_error` screen falls back to built-in markup.
+            return $this->fallbackErrorPage($e, $code, $renderFailure);
+        }
+    }
+
+    /**
+     * Render a minimal error page without touching the view layer.
+     *
+     * @param Throwable      $e             The original exception
+     * @param int            $code          Resolved HTTP status code
+     * @param Throwable|null $renderFailure Why the error screen could not render
+     */
+    protected function fallbackErrorPage(Throwable $e, int $code, ?Throwable $renderFailure = null): string
+    {
+        $escape = static fn (string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+        $title = $code . ' ' . ($code === 404 ? 'Not Found' : 'Error');
+
+        $body = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+            . '<title>' . $escape($title) . '</title></head><body>'
+            . '<h1>' . $escape($title) . '</h1>';
+
+        // Exception details are only exposed when the application asked for them.
+        if ($this->debug) {
+            $body .= '<p>' . $escape($e->getMessage()) . '</p>'
+                . '<pre>' . $escape($e->getFile() . ':' . $e->getLine()) . "\n"
+                . $escape($e->getTraceAsString()) . '</pre>';
+
+            if ($renderFailure !== null) {
+                $body .= '<p>The error screen could not be rendered: '
+                    . $escape($renderFailure->getMessage()) . '</p>';
+            }
+        } else {
+            $body .= '<p>Something went wrong.</p>';
+        }
+
+        return $body . '</body></html>';
     }
 
     /**
