@@ -231,14 +231,16 @@ class Request
         $sanitized = [];
 
         foreach ($input as $key => $value) {
-            if (is_array($value)) {
-                $sanitized[$key] = $this->sanitize($value);
+            if (is_string($value)) {
+                // FILTER_SANITIZE_FULL_SPECIAL_CHARS is htmlspecialchars with
+                // ENT_QUOTES; calling it directly skips the filter dispatch and
+                // pins the charset instead of inheriting default_charset.
+                // ENT_SUBSTITUTE keeps malformed UTF-8 from blanking the value.
+                $sanitized[$key] = htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
                 continue;
             }
 
-            $sanitized[$key] = is_string($value)
-                ? filter_var($value, FILTER_SANITIZE_FULL_SPECIAL_CHARS)
-                : $value;
+            $sanitized[$key] = is_array($value) ? $this->sanitize($value) : $value;
         }
 
         return $sanitized;
