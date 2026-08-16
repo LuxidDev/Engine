@@ -82,8 +82,10 @@ trait ActionHelpers
 
     /**
      * Get the authenticated user, or null for a guest.
+     *
+     * @return DbEntity|\Rocket\ORM\Entity|null
      */
-    protected function user(): ?DbEntity
+    protected function user(): ?object
     {
         return Application::$app->user;
     }

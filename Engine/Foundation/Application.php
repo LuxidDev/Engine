@@ -83,8 +83,14 @@ class Application
 
     /**
      * The authenticated user, when one is signed in.
+     *
+     * Typed loosely because the user entity is application defined: it may
+     * extend the legacy {@see DbEntity} or Rocket's `Entity`. Both expose the
+     * static `primaryKey()` and `findOne()` this class relies on.
+     *
+     * @var DbEntity|\Rocket\ORM\Entity|null
      */
-    public ?DbEntity $user = null;
+    public ?object $user = null;
 
     /**
      * The legacy screen renderer.
@@ -303,15 +309,15 @@ class Application
      * The session id is rotated first so a fixated id cannot survive the
      * privilege change.
      *
-     * @param DbEntity $user The user to sign in
+     * @param DbEntity|\Rocket\ORM\Entity $user The user to sign in
      */
-    public function login(DbEntity $user): bool
+    public function login(object $user): bool
     {
         $session = $this->getSession();
         $session->regenerate();
 
         $this->user = $user;
-        $session->set('user', $user->{$user->primaryKey()});
+        $session->set('user', $user->{$user::primaryKey()});
 
         return true;
     }
