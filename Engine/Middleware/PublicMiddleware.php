@@ -1,17 +1,24 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Luxid\Middleware;
 
 /**
- * Middleware for explicitly public routes (no authentication checks)
- * Alternative to AuthMiddleware with publicActivities array
+ * Marks a route as reachable without authentication.
+ *
+ * Deliberately a no-op. Its value is declarative: `RouteBuilder` requires every
+ * route to state a security posture, and this is how a route says "public" in a
+ * way the `juice routes` inspector can report.
+ *
+ * @package Luxid\Middleware
  */
 class PublicMiddleware extends BaseMiddleware
 {
-    public function execute()
+    /**
+     * Allow the request through unconditionally.
+     */
+    public function execute(): void
     {
-        // Public routes - no authentication required
-        // This middleware does nothing, just marks route as public
-        return;
     }
 }
