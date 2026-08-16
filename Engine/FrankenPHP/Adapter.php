@@ -4,118 +4,121 @@ declare(strict_types=1);
 
 namespace Luxid\FrankenPHP;
 
-use Luxid\Foundation\Application;
-use Luxid\Http\Request;
-use Luxid\Http\Response;
+use Luxid\Foundation\Worker;
 
 /**
- * Worker-mode adapter for FrankenPHP.
+ * FrankenPHP worker-mode entry point.
  *
- * The application boots once and then serves many requests from the same
- * process, so every piece of per-request state has to be replaced on each
- * iteration. Anything left behind — a resolved action, a hydrated user, a stale
- * superglobal — leaks from one visitor's request into the next one.
+ * FrankenPHP is the PHP SAPI, not a proxy in front of one: inside the handler
+ * the superglobals are repopulated for the current request and output goes out
+ * through `echo` and `header()` exactly as under PHP-FPM. Nothing here converts
+ * request objects, because there are none to convert.
+ *
+ * A previous version of this adapter accepted a PSR-7 style request and mapped
+ * it onto the superglobals. That is RoadRunner's model, not FrankenPHP's, and
+ * the handler signature it expected is never called by the runtime.
+ *
+ * Usage, as `web/worker.php`:
+ *
+ * ```php
+ * require __DIR__ . '/../vendor/autoload.php';
+ *
+ * Dotenv\Dotenv::createImmutable(dirname(__DIR__))->safeLoad();
+ *
+ * \Luxid\FrankenPHP\Adapter::run(
+ *     dirname(__DIR__),
+ *     require dirname(__DIR__) . '/config/config.php'
+ * );
+ * ```
+ *
+ * Then point FrankenPHP at it:
+ *
+ * ```
+ * frankenphp run --config Caddyfile
+ * # or
+ * FRANKENPHP_CONFIG="worker ./web/worker.php" frankenphp php-server -r web/
+ * ```
  *
  * @package Luxid\FrankenPHP
  */
-class Adapter
+final class Adapter
 {
     /**
-     * The long-lived application kernel.
+     * The worker serving requests.
      */
-    public Application $app;
+    private Worker $worker;
 
     /**
-     * Boot the application and load the route table once.
+     * @param Worker $worker A booted worker
+     */
+    public function __construct(Worker $worker)
+    {
+        $this->worker = $worker;
+    }
+
+    /**
+     * Boot the application and serve requests until the runtime stops.
+     *
+     * Returns normally when FrankenPHP shuts the worker down, or when the
+     * recycling thresholds are reached — the runtime then starts a fresh one.
      *
      * @param string               $rootPath Absolute path to the project root
      * @param array<string, mixed> $config   Application configuration
+     * @param array<string, mixed> $options  Worker recycling thresholds
      */
-    public function __construct(string $rootPath, array $config)
+    public static function run(string $rootPath, array $config, array $options = []): void
     {
-        $this->app = new Application($rootPath, $config);
-
-        require_once $rootPath . '/routes/api.php';
-        require_once $rootPath . '/routes/web.php';
+        (new self(Worker::boot($rootPath, $config, $options)))->loop();
     }
 
     /**
-     * Get a request handler closure for the FrankenPHP worker loop.
+     * Check whether the process is running under FrankenPHP's worker mode.
+     */
+    public static function isSupported(): bool
+    {
+        return function_exists('frankenphp_handle_request');
+    }
+
+    /**
+     * Serve requests until the runtime stops or the worker should be recycled.
      *
-     * @return callable(object): string
+     * @throws \RuntimeException When not running under FrankenPHP worker mode
      */
-    public function getHandler(): callable
+    public function loop(): void
     {
-        return fn (object $request): string => $this->handle($request);
-    }
-
-    /**
-     * Handle one request and return its body.
-     *
-     * @param object $request PSR-7 style request supplied by the runtime
-     */
-    public function handle(object $request): string
-    {
-        $this->resetRequestState();
-
-        $this->app->request = $this->toLuxidRequest($request);
-        $this->app->response = new Response();
-        $this->app->router->request = $this->app->request;
-        $this->app->router->response = $this->app->response;
-
-        $body = $this->app->handle();
-
-        $this->app->response->sendHeaders();
-
-        return $body;
-    }
-
-    /**
-     * Clear everything the previous request left on the kernel.
-     */
-    private function resetRequestState(): void
-    {
-        $this->app->action = null;
-        $this->app->user = null;
-        $this->app->session = null;
-
-        $_GET = [];
-        $_POST = [];
-    }
-
-    /**
-     * Convert the runtime's request object into a Luxid request.
-     *
-     * @param object $frankenRequest PSR-7 style request supplied by the runtime
-     */
-    private function toLuxidRequest(object $frankenRequest): Request
-    {
-        $request = new Request();
-
-        $uri = $frankenRequest->getUri();
-        $request->setPath($uri->getPath());
-        $request->setMethod($frankenRequest->getMethod());
-
-        foreach ($frankenRequest->getHeaders() as $name => $values) {
-            $request->setHeader((string) $name, implode(', ', $values));
+        if (!self::isSupported()) {
+            throw new \RuntimeException(
+                'frankenphp_handle_request() is unavailable. '
+                    . 'Run this script through FrankenPHP in worker mode, not the PHP CLI.'
+            );
         }
 
-        parse_str($uri->getQuery(), $query);
-        $_GET = $query;
+        $handler = $this->handler();
 
-        $body = (string) $frankenRequest->getBody();
+        // frankenphp_handle_request() blocks until a request arrives, runs the
+        // handler, and returns false once the runtime is shutting down.
+        do {
+            $keepRunning = \frankenphp_handle_request($handler);
+        } while ($keepRunning && !$this->worker->shouldRecycle());
+    }
 
-        if ($body !== '') {
-            $request->setBody($body);
+    /**
+     * Build the closure FrankenPHP invokes per request.
+     *
+     * @return callable(): void
+     */
+    public function handler(): callable
+    {
+        return function (): void {
+            $this->worker->serve();
+        };
+    }
 
-            $contentType = $frankenRequest->getHeaderLine('Content-Type');
-
-            if (!str_contains($contentType, 'application/json')) {
-                parse_str($body, $form);
-                $_POST = $form;
-            }
-        }
-
-        return $request;
+    /**
+     * Get the underlying worker.
+     */
+    public function worker(): Worker
+    {
+        return $this->worker;
     }
 }
