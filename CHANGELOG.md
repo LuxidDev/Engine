@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.8.1
+
+Performance. No API removals; the additions are listed below.
+
+### Performance
+
+- **Package discovery is compiled to a manifest.** Booting the application read
+  and JSON-decoded Composer's `installed.json` — around 30KB — on every single
+  request. It is now compiled to a PHP array literal that opcache keeps
+  resident, and rebuilt automatically when `installed.json` changes.
+  `new Application` went from ~174µs to ~7.5µs; a cold request boot went from
+  ~1.17ms to ~753µs.
+- **Routes are indexed by id.** Matching used to copy the whole route array —
+  callback, middleware lists and all — on every request. Routes are stored once
+  and the indexes hold ids.
+- **Dynamic routes are bucketed by segment count and leading literal.** A
+  request now tests the handful of patterns that could match rather than every
+  dynamic route. With 40 dynamic routes, matching the last one went from ~8.7µs
+  to ~2.1µs and no longer depends on position in the table. A 404 went from
+  ~7.5µs to ~1.5µs.
+- **Middleware chains are memoized per route** and rebuilt only when global
+  middleware is added.
+- **Route patterns compile without regex.** Placeholders are recognised by their
+  delimiters, and literal segments skip `preg_quote` when they need no escaping.
+- **Group context is resolved once per registration** instead of four times.
+- **Input sanitization uses `htmlspecialchars` directly** rather than the
+  `filter_var` dispatch — the same transformation, about 1.75x faster, with the
+  charset pinned to UTF-8 instead of inherited from `default_charset`.
+
+### Added
+
+- `Luxid\Foundation\PackageManifest`, with `providers()`, `commands()`,
+  `rebuild()`, `forget()` and `flush()`.
+- `Application::packageManifest()`.
+
+### Fixed
+
+- `Router::getRoutesForInspection()` reports routes grouped by method again
+  after the storage change.
+
 ## 0.8.0
 
 Pre-release. This version fixes defects that made the previous release unusable
