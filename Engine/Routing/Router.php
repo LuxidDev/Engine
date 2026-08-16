@@ -32,6 +32,12 @@ class Router
     public const METHODS = ['get', 'post', 'put', 'patch', 'delete'];
 
     /**
+     * The same methods as a lookup set, so validation is a hash hit rather than
+     * a linear scan on every registration.
+     */
+    private const METHOD_SET = ['get' => 0, 'post' => 1, 'put' => 2, 'patch' => 3, 'delete' => 4];
+
+    /**
      * The request being routed.
      */
     public Request $request;
@@ -42,25 +48,50 @@ class Router
     public Response $response;
 
     /**
-     * Routes with no placeholders, keyed by method then path.
+     * Every registered route, keyed by an incrementing id.
      *
-     * @var array<string, array<string, array<string, mixed>>>
+     * Routes live here once and the indexes below hold ids, so matching never
+     * copies a route array. Copying one meant duplicating its callback and
+     * middleware lists on every request.
+     *
+     * @var array<int, array<string, mixed>>
      */
-    protected array $staticRoutes = [];
+    protected array $routes = [];
 
     /**
-     * Routes carrying placeholders, keyed by method.
+     * Ids of placeholder-free routes, keyed by method then path.
      *
-     * @var array<string, list<array<string, mixed>>>
+     * @var array<string, array<string, int>>
      */
-    protected array $dynamicRoutes = [];
+    protected array $staticIndex = [];
 
     /**
-     * Method and path of the most recently registered route.
+     * Ids of placeholder routes, keyed by method, segment count and first segment.
      *
-     * @var array{method: string, path: string}|null
+     * Bucketing by segment count and leading literal means a request only tests
+     * the handful of patterns that could possibly match, rather than every
+     * dynamic route in the table.
+     *
+     * @var array<string, array<int, array<string, list<int>>>>
      */
-    protected ?array $lastRoute = null;
+    protected array $dynamicIndex = [];
+
+    /**
+     * Resolved middleware chains, keyed by route id.
+     *
+     * @var array<int, list<BaseMiddleware>>
+     */
+    protected array $chainCache = [];
+
+    /**
+     * Id assigned to the next registered route.
+     */
+    protected int $nextRouteId = 0;
+
+    /**
+     * Id of the most recently registered route.
+     */
+    protected ?int $lastRoute = null;
 
     /**
      * Middleware run before every route.
@@ -84,6 +115,17 @@ class Router
     private array $groupStack = [];
 
     /**
+     * The innermost group, kept in sync with the stack.
+     *
+     * Registration needs the prefix, middleware, auth flag and open list; each
+     * used to walk the stack separately, so a single route resolved the group
+     * four times.
+     *
+     * @var array{prefix: string, auth: bool, open: list<string>|null, middleware: list<BaseMiddleware>}
+     */
+    private array $activeGroup = ['prefix' => '', 'auth' => false, 'open' => null, 'middleware' => []];
+
+    /**
      * Middleware instances reused across registrations, keyed by class name.
      *
      * @var array<class-string<BaseMiddleware>, BaseMiddleware>
@@ -98,11 +140,6 @@ class Router
     {
         $this->request = $request;
         $this->response = $response;
-
-        foreach (self::METHODS as $method) {
-            $this->staticRoutes[$method] = [];
-            $this->dynamicRoutes[$method] = [];
-        }
     }
 
     /**
@@ -174,22 +211,31 @@ class Router
      */
     public function addRoute(string $method, string $path, callable|array|string $callback): self
     {
-        $method = strtolower($method);
+        if (!isset(self::METHOD_SET[$method])) {
+            $method = strtolower($method);
 
-        if (!in_array($method, self::METHODS, true)) {
-            throw new \InvalidArgumentException(sprintf('Unsupported HTTP method "%s"', $method));
+            if (!isset(self::METHOD_SET[$method])) {
+                throw new \InvalidArgumentException(sprintf('Unsupported HTTP method "%s"', $method));
+            }
         }
 
-        $path = $this->normalizePath($this->applyGroupPrefix($path));
+        $group = $this->activeGroup;
+
+        $path = $group['prefix'] === ''
+            ? $this->normalizePath($path)
+            : $this->normalizePath(rtrim($group['prefix'], '/') . '/' . ltrim($path, '/'));
+
+        $id = $this->nextRouteId++;
 
         $route = [
+            'id' => $id,
             'method' => $method,
             'path' => $path,
             'callback' => $callback,
             'middleware' => [],
-            'groupMiddleware' => $this->collectGroupMiddleware(),
-            'groupAuth' => $this->getGroupAuth(),
-            'groupOpen' => $this->getGroupOpen(),
+            'groupMiddleware' => $group['middleware'],
+            'groupAuth' => $group['auth'],
+            'groupOpen' => $group['open'],
         ];
 
         if (str_contains($path, '{')) {
@@ -197,14 +243,34 @@ class Router
             $route['regex'] = $compiled['regex'];
             $route['params'] = $compiled['params'];
 
-            $this->dynamicRoutes[$method][] = $route;
+            $this->routes[$id] = $route;
+            $this->indexDynamic($method, $id, $compiled);
         } else {
-            $this->staticRoutes[$method][$path] = $route;
+            $this->routes[$id] = $route;
+            $this->staticIndex[$method][$path] = $id;
         }
 
-        $this->lastRoute = ['method' => $method, 'path' => $path];
+        $this->lastRoute = $id;
 
         return $this;
+    }
+
+    /**
+     * File a dynamic route under every segment count it can match.
+     *
+     * A route with optional placeholders matches a range of lengths, so it is
+     * filed under each one. The second level keys on the leading literal
+     * segment where there is one, which is the common case.
+     *
+     * @param string                                                             $method   Lowercased HTTP method
+     * @param int                                                                $id       Route id
+     * @param array{regex: string, params: list<string>, min: int, max: int, head: string} $compiled Compiled pattern
+     */
+    protected function indexDynamic(string $method, int $id, array $compiled): void
+    {
+        for ($count = $compiled['min']; $count <= $compiled['max']; $count++) {
+            $this->dynamicIndex[$method][$count][$compiled['head']][] = $id;
+        }
     }
 
     /**
@@ -218,20 +284,8 @@ class Router
             return $this;
         }
 
-        ['method' => $method, 'path' => $path] = $this->lastRoute;
-
-        if (isset($this->staticRoutes[$method][$path])) {
-            $this->staticRoutes[$method][$path]['middleware'][] = $middleware;
-
-            return $this;
-        }
-
-        foreach ($this->dynamicRoutes[$method] as $index => $route) {
-            if ($route['path'] === $path) {
-                $this->dynamicRoutes[$method][$index]['middleware'][] = $middleware;
-                break;
-            }
-        }
+        $this->routes[$this->lastRoute]['middleware'][] = $middleware;
+        unset($this->chainCache[$this->lastRoute]);
 
         return $this;
     }
@@ -244,6 +298,7 @@ class Router
     public function addGlobalMiddleware(BaseMiddleware $middleware): void
     {
         $this->globalMiddleware[] = $middleware;
+        $this->chainCache = [];
     }
 
     /**
@@ -270,14 +325,14 @@ class Router
             $options = ['auth' => true];
         }
 
-        $parent = $this->currentGroup();
+        $parent = $this->activeGroup;
 
-        $this->groupStack[] = [
-            'prefix' => $this->mergePrefix($parent['prefix'] ?? '', $options['prefix'] ?? ''),
-            'auth' => $options['auth'] ?? $parent['auth'] ?? false,
-            'open' => $options['open'] ?? $parent['open'] ?? null,
+        $this->groupStack[] = $this->activeGroup = [
+            'prefix' => $this->mergePrefix($parent['prefix'], $options['prefix'] ?? ''),
+            'auth' => (bool) ($options['auth'] ?? $parent['auth']),
+            'open' => $options['open'] ?? $parent['open'],
             'middleware' => array_merge(
-                $parent['middleware'] ?? [],
+                $parent['middleware'],
                 $this->normalizeMiddleware($options['middleware'] ?? [])
             ),
         ];
@@ -286,6 +341,9 @@ class Router
             $callback($this);
         } finally {
             array_pop($this->groupStack);
+            $this->activeGroup = $this->groupStack === []
+                ? ['prefix' => '', 'auth' => false, 'open' => null, 'middleware' => []]
+                : $this->groupStack[array_key_last($this->groupStack)];
         }
     }
 
@@ -300,20 +358,20 @@ class Router
         $path = $this->normalizePath($this->request->getPath());
         $method = $this->request->method();
 
-        $route = $this->match($method, $path);
+        $matched = $this->match($method, $path);
 
-        if ($route === null) {
+        if ($matched === null) {
             $this->guardAgainstMethodMismatch($method, $path);
 
             throw new NotFoundException();
         }
 
-        $callback = $route['callback'];
-        $params = $route['matchedParams'];
+        [$id, $params] = $matched;
 
+        $callback = $this->routes[$id]['callback'];
         $action = $this->resolveAction($callback);
 
-        foreach ($this->middlewareFor($route) as $middleware) {
+        foreach ($this->middlewareFor($id) as $middleware) {
             $middleware->execute();
         }
 
@@ -329,37 +387,61 @@ class Router
     /**
      * Find the route matching the given method and path.
      *
+     * Static paths resolve through a hash lookup. Dynamic paths are narrowed by
+     * segment count and leading literal before any pattern is tested, so a large
+     * route table costs about as much to match as a small one.
+     *
      * @param string $method Lowercased HTTP method
      * @param string $path   Normalized request path
      *
-     * @return array<string, mixed>|null The matched route with its `matchedParams`
+     * @return array{0: int, 1: array<string, string|null>}|null Route id and matched parameters
      */
     protected function match(string $method, string $path): ?array
     {
-        if (!isset($this->staticRoutes[$method])) {
+        $id = $this->staticIndex[$method][$path] ?? null;
+
+        if ($id !== null) {
+            return [$id, []];
+        }
+
+        $buckets = $this->dynamicIndex[$method] ?? null;
+
+        if ($buckets === null) {
             return null;
         }
 
-        if (isset($this->staticRoutes[$method][$path])) {
-            $route = $this->staticRoutes[$method][$path];
-            $route['matchedParams'] = [];
+        $segments = $path === '/' ? [] : explode('/', substr($path, 1));
+        $candidates = $buckets[count($segments)] ?? null;
 
-            return $route;
+        if ($candidates === null) {
+            return null;
         }
 
-        foreach ($this->dynamicRoutes[$method] as $route) {
-            if (preg_match($route['regex'], $path, $matches) !== 1) {
-                continue;
+        $head = $segments[0] ?? '';
+
+        // Patterns whose first segment is a literal live under that literal;
+        // everything else shares the wildcard bucket.
+        foreach ([$head, '*'] as $key) {
+            foreach ($candidates[$key] ?? [] as $candidateId) {
+                $route = $this->routes[$candidateId];
+
+                if (preg_match($route['regex'], $path, $matches) !== 1) {
+                    continue;
+                }
+
+                $params = [];
+
+                foreach ($route['params'] as $name) {
+                    $value = $matches[$name] ?? '';
+                    $params[$name] = $value === '' ? null : $value;
+                }
+
+                return [$candidateId, $params];
             }
 
-            $params = [];
-            foreach ($route['params'] as $name) {
-                $params[$name] = ($matches[$name] ?? '') !== '' ? $matches[$name] : null;
+            if ($head === '*') {
+                break;
             }
-
-            $route['matchedParams'] = $params;
-
-            return $route;
         }
 
         return null;
@@ -378,7 +460,17 @@ class Router
         $allowed = [];
 
         foreach (self::METHODS as $candidate) {
-            if ($candidate !== $method && $this->match($candidate, $path) !== null) {
+            if ($candidate === $method) {
+                continue;
+            }
+
+            // Skip methods with no routes at all before doing any matching;
+            // most tables only register two or three of the five.
+            if (!isset($this->staticIndex[$candidate]) && !isset($this->dynamicIndex[$candidate])) {
+                continue;
+            }
+
+            if ($this->match($candidate, $path) !== null) {
                 $allowed[] = strtoupper($candidate);
             }
         }
@@ -431,22 +523,33 @@ class Router
     /**
      * Build the middleware chain for a route, in execution order.
      *
-     * @param array<string, mixed> $route Matched route
+     * The route-scoped half of the chain never changes once registration is
+     * done, so it is merged once and reused. Only the API-global segment
+     * depends on the request, and it is appended without rebuilding the rest.
+     *
+     * @param int $id Matched route id
      *
      * @return list<BaseMiddleware>
      */
-    protected function middlewareFor(array $route): array
+    protected function middlewareFor(int $id): array
     {
-        $middleware = $this->globalMiddleware;
+        $chain = $this->chainCache[$id] ??= array_merge(
+            $this->globalMiddleware,
+            $this->routes[$id]['groupMiddleware'],
+            $this->routes[$id]['middleware']
+        );
 
-        if ($this->isApiRequest($route['path'])) {
-            $middleware = array_merge($middleware, $this->apiGlobalMiddleware);
+        if ($this->apiGlobalMiddleware === [] || !$this->isApiRequest($this->routes[$id]['path'])) {
+            return $chain;
         }
 
+        // API middleware runs after global but before the route's own, matching
+        // the order a single merge would produce.
         return array_merge(
-            $middleware,
-            $route['groupMiddleware'] ?? [],
-            $route['middleware'] ?? []
+            $this->globalMiddleware,
+            $this->apiGlobalMiddleware,
+            $this->routes[$id]['groupMiddleware'],
+            $this->routes[$id]['middleware']
         );
     }
 
@@ -546,33 +649,78 @@ class Router
      *
      * @param string $path Normalized route path
      *
-     * @return array{regex: string, params: list<string>}
+     * @return array{regex: string, params: list<string>, min: int, max: int, head: string}
      */
     protected function compilePattern(string $path): array
     {
         $params = [];
         $regex = '';
+        $required = 0;
+        $optional = 0;
+        $head = null;
 
         foreach (explode('/', trim($path, '/')) as $segment) {
             if ($segment === '') {
                 continue;
             }
 
-            if (preg_match('/^\{([a-zA-Z_][a-zA-Z0-9_]*)(\?)?\}$/', $segment, $matches) !== 1) {
-                $regex .= '/' . preg_quote($segment, '#');
+            // Placeholders are recognised by their delimiters rather than a
+            // regex, so compiling a route table costs no pattern matching.
+            $isPlaceholder = $segment[0] === '{' && str_ends_with($segment, '}');
+            $name = $isPlaceholder ? substr($segment, 1, -1) : '';
+            $isOptional = $name !== '' && $name[-1] === '?';
+
+            if ($isOptional) {
+                $name = substr($name, 0, -1);
+            }
+
+            if (!$isPlaceholder || !self::isParameterName($name)) {
+                $regex .= '/' . (ctype_alnum(str_replace(['_', '-'], '', $segment))
+                    ? $segment
+                    : preg_quote($segment, '#'));
+                $head ??= $segment;
+                ++$required;
+
                 continue;
             }
 
-            $params[] = $matches[1];
-            $piece = '/(?P<' . $matches[1] . '>[^/]+)';
+            $params[] = $name;
+            $piece = '/(?P<' . $name . '>[^/]+)';
+            $head ??= '*';
 
-            $regex .= isset($matches[2]) ? '(?:' . $piece . ')?' : $piece;
+            if ($isOptional) {
+                $regex .= '(?:' . $piece . ')?';
+                ++$optional;
+            } else {
+                $regex .= $piece;
+                ++$required;
+            }
         }
 
         return [
             'regex' => '#^' . ($regex === '' ? '/' : $regex) . '$#',
             'params' => $params,
+            'min' => $required,
+            'max' => $required + $optional,
+            'head' => $head ?? '*',
         ];
+    }
+
+    /**
+     * Check whether a placeholder name is a usable capture group name.
+     *
+     * PCRE group names must start with a letter or underscore and contain only
+     * word characters; anything else is treated as a literal segment.
+     *
+     * @param string $name Candidate placeholder name
+     */
+    private static function isParameterName(string $name): bool
+    {
+        if ($name === '' || !(ctype_alpha($name[0]) || $name[0] === '_')) {
+            return false;
+        }
+
+        return ctype_alnum(str_replace('_', '', $name)) || str_replace('_', '', $name) === '';
     }
 
     /**
@@ -582,9 +730,8 @@ class Router
      */
     protected function normalizePath(string $path): string
     {
-        $path = '/' . trim($path, '/');
-
-        return $path === '/' ? '/' : rtrim($path, '/');
+        // trim already removed any trailing slash, so one pass is enough.
+        return $path === '/' || $path === '' ? '/' : '/' . trim($path, '/');
     }
 
     /**
@@ -629,7 +776,7 @@ class Router
      */
     private function currentGroup(): array
     {
-        return $this->groupStack === [] ? [] : end($this->groupStack);
+        return $this->activeGroup;
     }
 
     /**
@@ -740,24 +887,23 @@ class Router
     {
         $formatted = [];
 
-        foreach (self::METHODS as $method) {
-            $routes = array_merge(
-                array_values($this->staticRoutes[$method]),
-                $this->dynamicRoutes[$method]
-            );
-
-            foreach ($routes as $route) {
-                $formatted[] = [
-                    'method' => $method,
-                    'path' => $route['path'],
-                    'callback' => $route['callback'],
-                    'middleware' => $route['middleware'],
-                    'groupMiddleware' => $route['groupMiddleware'],
-                    'groupAuth' => $route['groupAuth'],
-                    'groupOpen' => $route['groupOpen'],
-                ];
-            }
+        foreach ($this->routes as $route) {
+            $formatted[] = [
+                'method' => $route['method'],
+                'path' => $route['path'],
+                'callback' => $route['callback'],
+                'middleware' => $route['middleware'],
+                'groupMiddleware' => $route['groupMiddleware'],
+                'groupAuth' => $route['groupAuth'],
+                'groupOpen' => $route['groupOpen'],
+            ];
         }
+
+        // Grouped by method so the CLI inspector's output stays stable.
+        usort(
+            $formatted,
+            static fn (array $a, array $b): int => self::METHOD_SET[$a['method']] <=> self::METHOD_SET[$b['method']]
+        );
 
         return $formatted;
     }
