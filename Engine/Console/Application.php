@@ -3,6 +3,7 @@
 namespace Luxid\Console;
 
 use Luxid\Console\Commands\{
+    OptimizeCommand,
     StartCommand,
     FreshCommand,
     StatusCommand,
@@ -49,6 +50,7 @@ class Application
             'fresh' => FreshCommand::class,
             'status' => StatusCommand::class,
             'routes' => RoutesCommand::class,
+            'optimize' => OptimizeCommand::class,
             'db:create' => DbCreateCommand::class,
             'db:drop' => DbDropCommand::class,
             'db:reset' => DbResetCommand::class,
