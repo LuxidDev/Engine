@@ -1,77 +1,98 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Luxid\Foundation;
 
+use Luxid\Database\DbEntity;
 use Luxid\Http\Request;
 use Luxid\Http\Response;
-use Luxid\Http\Session;
+use Luxid\Http\SessionInterface;
 use Luxid\Routing\Router;
 use Rocket\Connection\Connection;
 
+/**
+ * Convenience accessors shared by every action.
+ *
+ * Kept as a trait rather than base-class methods so applications can mix them
+ * into their own hierarchy.
+ *
+ * @package Luxid\Foundation
+ */
 trait ActionHelpers
 {
-  /**
-   * Get the Application instance
-   */
-  protected function app(): Application
-  {
-    return Application::$app;
-  }
+    /**
+     * Get the application kernel.
+     */
+    protected function app(): Application
+    {
+        return Application::$app;
+    }
 
-  /**
-   * Get the Request instance
-   */
-  protected function request(): Request
-  {
-    return Application::$app->request;
-  }
+    /**
+     * Get the current request.
+     */
+    protected function request(): Request
+    {
+        return Application::$app->request;
+    }
 
-  /**
-   * Get the Response instance
-   */
-  protected function response(): Response
-  {
-    return Application::$app->response;
-  }
+    /**
+     * Get the current response.
+     */
+    protected function response(): Response
+    {
+        return Application::$app->response;
+    }
 
-  /**
-   * Get the Session instance
-   */
-  protected function session(): Session
-  {
-    return Application::$app->session;
-  }
+    /**
+     * Get the session, booting it if this is the first access.
+     *
+     * Resolves through the kernel rather than reading the property directly, so
+     * the session is guaranteed to exist even outside a web request.
+     */
+    protected function session(): SessionInterface
+    {
+        return Application::$app->getSession();
+    }
 
-  /**
-   * Get the Database connection
-   * Returns Rocket\Connection\Connection instead of the old Database class
-   */
-  protected function db(): Connection
-  {
-    return Application::$app->db;
-  }
+    /**
+     * Get the database connection.
+     *
+     * @throws \RuntimeException When no database is configured
+     */
+    protected function db(): Connection
+    {
+        $connection = Application::$app->db;
 
-  /**
-   * Get the Router instance
-   */
-  protected function router(): Router
-  {
-    return Application::$app->router;
-  }
+        if ($connection === null) {
+            throw new \RuntimeException('No database connection configured for this application.');
+        }
 
-  /**
-   * Get the current authenticated user
-   */
-  protected function user(): ?\Luxid\Database\DbEntity
-  {
-    return Application::$app->user;
-  }
+        return $connection;
+    }
 
-  /**
-   * Check if current user is guest
-   */
-  protected function isGuest(): bool
-  {
-    return Application::isGuest();
-  }
+    /**
+     * Get the router.
+     */
+    protected function router(): Router
+    {
+        return Application::$app->router;
+    }
+
+    /**
+     * Get the authenticated user, or null for a guest.
+     */
+    protected function user(): ?DbEntity
+    {
+        return Application::$app->user;
+    }
+
+    /**
+     * Check whether the current visitor is unauthenticated.
+     */
+    protected function isGuest(): bool
+    {
+        return Application::isGuest();
+    }
 }
