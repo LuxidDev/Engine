@@ -1,83 +1,121 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Luxid\FrankenPHP;
 
 use Luxid\Foundation\Application;
+use Luxid\Http\Request;
+use Luxid\Http\Response;
 
+/**
+ * Worker-mode adapter for FrankenPHP.
+ *
+ * The application boots once and then serves many requests from the same
+ * process, so every piece of per-request state has to be replaced on each
+ * iteration. Anything left behind — a resolved action, a hydrated user, a stale
+ * superglobal — leaks from one visitor's request into the next one.
+ *
+ * @package Luxid\FrankenPHP
+ */
 class Adapter
 {
-    public $app;
+    /**
+     * The long-lived application kernel.
+     */
+    public Application $app;
 
+    /**
+     * Boot the application and load the route table once.
+     *
+     * @param string               $rootPath Absolute path to the project root
+     * @param array<string, mixed> $config   Application configuration
+     */
     public function __construct(string $rootPath, array $config)
     {
-        // Boot Luxid ONCE
         $this->app = new Application($rootPath, $config);
 
-        // Load routes ONCE
         require_once $rootPath . '/routes/api.php';
         require_once $rootPath . '/routes/web.php';
     }
 
     /**
-     * Get the request handler for FrankenPHP
+     * Get a request handler closure for the FrankenPHP worker loop.
+     *
+     * @return callable(object): string
      */
     public function getHandler(): callable
     {
-        return function ($request) {
-            return $this->handle($request);
-        };
+        return fn (object $request): string => $this->handle($request);
     }
 
     /**
-     * Handle a request
+     * Handle one request and return its body.
+     *
+     * @param object $request PSR-7 style request supplied by the runtime
      */
-    public function handle($request): string
+    public function handle(object $request): string
     {
-        // Convert FrankenPHP request to Luxid request
-        $luxidReq = $this->toLuxidRequest($request);
-        $luxidRes = new \Luxid\Http\Response();
+        $this->resetRequestState();
 
-        // Set request/response on app
-        $this->app->request = $luxidReq;
-        $this->app->response = $luxidRes;
+        $this->app->request = $this->toLuxidRequest($request);
+        $this->app->response = new Response();
+        $this->app->router->request = $this->app->request;
+        $this->app->router->response = $this->app->response;
 
-        // Handle request
-        return $this->app->run();
+        $body = $this->app->handle();
+
+        $this->app->response->sendHeaders();
+
+        return $body;
     }
 
-    private function toLuxidRequest($frankenRequest): \Luxid\Http\Request
+    /**
+     * Clear everything the previous request left on the kernel.
+     */
+    private function resetRequestState(): void
     {
-        $luxidReq = new \Luxid\Http\Request();
+        $this->app->action = null;
+        $this->app->user = null;
+        $this->app->session = null;
 
-        // Get URI path
+        $_GET = [];
+        $_POST = [];
+    }
+
+    /**
+     * Convert the runtime's request object into a Luxid request.
+     *
+     * @param object $frankenRequest PSR-7 style request supplied by the runtime
+     */
+    private function toLuxidRequest(object $frankenRequest): Request
+    {
+        $request = new Request();
+
         $uri = $frankenRequest->getUri();
-        $luxidReq->setPath($uri->getPath());
-        $luxidReq->setMethod(strtolower($frankenRequest->getMethod()));
+        $request->setPath($uri->getPath());
+        $request->setMethod($frankenRequest->getMethod());
 
-        // Get body
-        $body = $frankenRequest->getContent();
-        if ($body) {
-            $luxidReq->setBody($body);
+        foreach ($frankenRequest->getHeaders() as $name => $values) {
+            $request->setHeader((string) $name, implode(', ', $values));
+        }
 
-            // Parse JSON if content-type is JSON
+        parse_str($uri->getQuery(), $query);
+        $_GET = $query;
+
+        $body = (string) $frankenRequest->getBody();
+
+        if ($body !== '') {
+            $request->setBody($body);
+
             $contentType = $frankenRequest->getHeaderLine('Content-Type');
-            if (strpos($contentType, 'application/json') !== false) {
-                $_POST = json_decode($body, true) ?? [];
+
+            if (!str_contains($contentType, 'application/json')) {
+                parse_str($body, $form);
+                $_POST = $form;
             }
         }
 
-        // Set query parameters
-        parse_str($uri->getQuery(), $query);
-        if (!empty($query)) {
-            $_GET = $query;
-        }
-
-        // Set headers
-        foreach ($frankenRequest->getHeaders() as $name => $values) {
-            $luxidReq->setHeader($name, implode(', ', $values));
-        }
-
-        return $luxidReq;
+        return $request;
     }
 }
-
