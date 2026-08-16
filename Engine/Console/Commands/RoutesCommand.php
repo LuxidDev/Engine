@@ -42,12 +42,28 @@ class RoutesCommand extends Command
         return 0;
     }
 
+    /**
+     * Get every route file in the project's routes directory.
+     *
+     * The inspector used to read only `api.php`, so web routes never appeared
+     * in its output.
+     *
+     * @return list<string> Absolute paths, in a stable order
+     */
+    private function getRouteFiles(): array
+    {
+        $files = glob($this->getRoutesPath() . '/*.php') ?: [];
+        sort($files);
+
+        return $files;
+    }
+
     private function loadRoutesSafely(): array
     {
         $routes = [];
-        $routesFile = $this->getRoutesPath() . '/api.php';
+        $routeFiles = $this->getRouteFiles();
 
-        if (!file_exists($routesFile)) {
+        if ($routeFiles === []) {
             return $routes;
         }
 
@@ -91,8 +107,10 @@ class RoutesCommand extends Command
             // IMPORTANT: Initialize Application::$app before requiring routes
             $this->initializeApplicationForCli($config);
 
-            // Now load the routes file
-            require $routesFile;
+            // Load every route file so web and API routes are both reported.
+            foreach ($routeFiles as $routeFile) {
+                require $routeFile;
+            }
 
             // Get routes from the global Application instance
             if (isset(Application::$app) && Application::$app !== null) {
@@ -198,9 +216,9 @@ class RoutesCommand extends Command
     private function loadRoutesFromRouter(): array
     {
         $routes = [];
-        $routesFile = $this->getRoutesPath() . '/api.php';
+        $routeFiles = $this->getRouteFiles();
 
-        if (!file_exists($routesFile)) {
+        if ($routeFiles === []) {
             return $routes;
         }
 
@@ -276,8 +294,10 @@ class RoutesCommand extends Command
             // Create Application instance - this will work in CLI because we have NullSession
             $app = new Application($this->getProjectRoot(), $config);
 
-            // Load the routes file - this populates the router
-            require $routesFile;
+            // Load every route file - this populates the router
+            foreach ($routeFiles as $routeFile) {
+                require $routeFile;
+            }
 
             // Get routes from router using the new inspection method
             $routerRoutes = $app->router->getRoutesForInspection();
@@ -379,13 +399,15 @@ class RoutesCommand extends Command
     private function loadRoutesFromFile(): array
     {
         $routes = [];
-        $routesFile = $this->getRoutesPath() . '/api.php';
+        $content = '';
 
-        if (!file_exists($routesFile)) {
-            return $routes;
+        foreach ($this->getRouteFiles() as $routeFile) {
+            $content .= file_get_contents($routeFile);
         }
 
-        $content = file_get_contents($routesFile);
+        if ($content === '') {
+            return $routes;
+        }
 
         // Clean up content for easier parsing
         $content = str_replace(["\r", "\n", "\t"], ' ', $content);
