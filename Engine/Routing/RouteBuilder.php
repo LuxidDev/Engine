@@ -1,27 +1,85 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Luxid\Routing;
 
+use Luxid\Contracts\Auth\AuthManager;
 use Luxid\Foundation\Application;
 use Luxid\Middleware\AuthMiddleware;
 use Luxid\Middleware\BaseMiddleware;
 use Luxid\Middleware\PublicMiddleware;
 
 /**
- * RouteBuilder provides a fluent, action-first DSL for routing
+ * Fluent, action-first route definition.
+ *
+ * Every route must state a security posture before it is registered:
+ *
+ * - `secure()` / `auth()` require authentication
+ * - `open([...])` require authentication except for the named activities
+ * - `public()`   waive authentication entirely
+ *
+ * A route that declares none of these throws at boot rather than silently
+ * defaulting to open, which is the single most useful guarantee this router
+ * offers over hand-rolled route tables.
+ *
+ * @package Luxid\Routing
  */
 class RouteBuilder
 {
+    /**
+     * Human readable route name, used in error messages.
+     */
     private string $name;
-    private string $method;
-    private string $path;
-    private $callback;
+
+    /**
+     * Lowercased HTTP method, once one has been chosen.
+     */
+    private ?string $method = null;
+
+    /**
+     * Route path, once one has been chosen.
+     */
+    private ?string $path = null;
+
+    /**
+     * Handler to invoke, as a [class, activity] pair.
+     *
+     * @var array{0: class-string, 1: string}|null
+     */
+    private ?array $callback = null;
+
+    /**
+     * The router this route registers with.
+     */
     private Router $router;
+
+    /**
+     * Middleware to attach once the route registers.
+     *
+     * @var list<BaseMiddleware>
+     */
     private array $middleware = [];
+
+    /**
+     * Whether a security posture has been declared.
+     */
     private bool $securityConfigured = false;
+
+    /**
+     * Whether the route has already been handed to the router.
+     */
     private bool $routeRegistered = false;
+
+    /**
+     * Whether an enclosing group's security posture should be inherited.
+     */
     private bool $inheritGroupSecurity = true;
 
+    /**
+     * @param Router $router The router to register with
+     * @param string $name   Human readable route name
+     */
     public function __construct(Router $router, string $name)
     {
         $this->router = $router;
@@ -29,75 +87,96 @@ class RouteBuilder
     }
 
     /**
-     * Define a GET route
+     * Define a GET route.
+     *
+     * @param string $path Route path
      */
     public function get(string $path): self
     {
-        $this->method = 'get';
-        $this->path = $path;
-        return $this;
+        return $this->to('get', $path);
     }
 
     /**
-     * Define a POST route
+     * Define a POST route.
+     *
+     * @param string $path Route path
      */
     public function post(string $path): self
     {
-        $this->method = 'post';
-        $this->path = $path;
-        return $this;
+        return $this->to('post', $path);
     }
 
     /**
-     * Define a PUT route
+     * Define a PUT route.
+     *
+     * @param string $path Route path
      */
     public function put(string $path): self
     {
-        $this->method = 'put';
-        $this->path = $path;
-        return $this;
+        return $this->to('put', $path);
     }
 
     /**
-     * Define a PATCH route
+     * Define a PATCH route.
+     *
+     * @param string $path Route path
      */
     public function patch(string $path): self
     {
-        $this->method = 'patch';
-        $this->path = $path;
-        return $this;
+        return $this->to('patch', $path);
     }
 
     /**
-     * Define a DELETE route
+     * Define a DELETE route.
+     *
+     * @param string $path Route path
      */
     public function delete(string $path): self
     {
-        $this->method = 'delete';
-        $this->path = $path;
-        return $this;
+        return $this->to('delete', $path);
     }
 
     /**
-     * Bind the route to an Action class
+     * Record the method and path for this route.
+     *
+     * @param string $method Lowercased HTTP method
+     * @param string $path   Route path
      */
-    public function uses(string $actionClass, string $method = 'index'): self
+    private function to(string $method, string $path): self
     {
-        $this->callback = [$actionClass, $method];
+        $this->method = $method;
+        $this->path = $path;
+
         return $this;
     }
 
     /**
-     * Disable group security inheritance for this route
+     * Bind the route to an action class and activity.
+     *
+     * @param class-string $actionClass Action to instantiate
+     * @param string       $activity    Method on the action to invoke
+     */
+    public function uses(string $actionClass, string $activity = 'index'): self
+    {
+        $this->callback = [$actionClass, $activity];
+
+        return $this;
+    }
+
+    /**
+     * Opt out of inheriting the enclosing group's security posture.
      */
     public function withoutInheritance(): self
     {
         $this->inheritGroupSecurity = false;
+
         return $this;
     }
 
     /**
-     * Mark route as secure (requires authentication)
+     * Require authentication, optionally exempting named activities.
+     *
+     * @param list<string> $publicActivities Activities reachable without auth
      */
     public function secure(array $publicActivities = []): self
     {
@@ -105,65 +184,50 @@ class RouteBuilder
     }
 
     /**
-     * Mark route as requiring authentication
+     * Require authentication, optionally exempting named activities.
+     *
+     * @param list<string> $publicActivities Activities reachable without auth
      */
     public function auth(array $publicActivities = []): self
     {
-        // Check if an auth manager is registered in the container
-        $authManager = null;
-
-        if (isset(Application::$app) && Application::$app->auth) {
-            $authManager = Application::$app->auth;
-        } elseif (class_exists('Luxid\Haven\Haven')) {
-            try {
-                $havenClass = 'Luxid\Haven\Haven';
-                if (method_exists($havenClass, 'getManager')) {
-                    $authManager = $havenClass::getManager();
-                }
-            } catch (\Exception $e) {
-                // Haven not initialized
-            }
-        }
-
-        if ($authManager) {
-            $this->with(new AuthMiddleware($authManager, $publicActivities));
-        } else {
-            $this->addAuthMiddleware($publicActivities);
-        }
-
+        $this->middleware[] = new AuthMiddleware($this->resolveAuthManager(), $publicActivities);
         $this->securityConfigured = true;
-        $this->registerRouteIfNeeded();
-        return $this;
+
+        return $this->register();
     }
 
     /**
-     * Mark route as completely public (no auth checks at all)
-     * Uses PublicMiddleware
-     */
-    public function public(): self
-    {
-        $this->addPublicMiddleware();
-        $this->securityConfigured = true;
-        $this->registerRouteIfNeeded();
-        return $this;
-    }
-
-    /**
-     * Mark route as open with specific public activities
-     * Uses AuthMiddleware with public activities list
+     * Require authentication except for the named activities.
+     *
+     * Unlike {@see RouteBuilder::public()} this still protects every activity the
+     * caller did not name.
+     *
+     * @param list<string> $activities Activities reachable without auth
      */
     public function open(array $activities = []): self
     {
-        $this->addPublicMiddleware();
-        $this->securityConfigured = true;
-        $this->registerRouteIfNeeded();
-        return $this;
+        return $this->auth($activities);
     }
 
     /**
-     * Add generic middleware to the route
+     * Waive authentication for this route entirely.
      */
-    public function with($middleware): self
+    public function public(): self
+    {
+        $this->middleware[] = new PublicMiddleware();
+        $this->securityConfigured = true;
+
+        return $this->register();
+    }
+
+    /**
+     * Attach additional middleware to the route.
+     *
+     * @param BaseMiddleware|class-string<BaseMiddleware> $middleware Middleware to attach
+     *
+     * @throws \InvalidArgumentException When the argument is not usable as middleware
+     */
+    public function with(BaseMiddleware|string $middleware): self
     {
         if (is_string($middleware)) {
             if (!class_exists($middleware)) {
@@ -174,137 +238,146 @@ class RouteBuilder
 
             if (!is_subclass_of($middleware, BaseMiddleware::class)) {
                 throw new \InvalidArgumentException(
-                    sprintf('Middleware "%s" must extend BaseMiddleware', $middleware)
+                    sprintf('Middleware "%s" must extend %s', $middleware, BaseMiddleware::class)
                 );
             }
 
             $middleware = new $middleware();
         }
 
-        if (!$middleware instanceof BaseMiddleware) {
-            throw new \InvalidArgumentException(
-                'Middleware must be an instance of BaseMiddleware or a class name string'
-            );
-        }
-
         $this->middleware[] = $middleware;
+
         return $this;
     }
 
     /**
-     * Force route registration (for CLI commands)
+     * Hand the route to the router if it has not been registered yet.
+     *
+     * @throws \RuntimeException When the definition is incomplete or insecure
      */
     public function register(): self
     {
-        $this->registerRouteIfNeeded();
-        return $this;
-    }
-
-    /**
-     * Register the route with the router
-     */
-    private function registerRouteIfNeeded(): void
-    {
         if ($this->routeRegistered) {
-            return;
+            return $this;
         }
 
-        // Validate route is complete before registering
-        if (!isset($this->method) || !isset($this->path) || !isset($this->callback)) {
+        if ($this->method === null || $this->path === null || $this->callback === null) {
             throw new \RuntimeException(
-                sprintf('Route "%s" definition incomplete. Must specify method, path, and uses()', $this->name)
+                sprintf('Route "%s" is incomplete. Specify a method, a path and uses().', $this->name)
             );
         }
 
-        // Apply group security inheritance if enabled
-        if (!$this->securityConfigured && $this->inheritGroupSecurity) {
-            $groupInfo = $this->getCurrentGroupInfo();
+        $this->inheritGroupSecurity();
+        $this->assertSecurityDeclared();
 
-            if ($groupInfo && $groupInfo['auth'] === true) {
-                // Auto-apply auth from group
-                $this->addAuthMiddleware([]);
-                $this->securityConfigured = true;
-            } elseif ($groupInfo && $groupInfo['open'] !== null) {
-                // Auto-apply open from group
-                $this->addAuthMiddleware($groupInfo['open']);
-                $this->securityConfigured = true;
-            }
-        }
+        $this->router->addRoute($this->method, $this->path, $this->callback);
 
-        // For CLI commands, allow routes without explicit security
-        $isCli = php_sapi_name() === 'cli';
-        if (!$this->securityConfigured && !$isCli) {
-            throw new \RuntimeException(
-                sprintf(
-                    'Route "%s" must explicitly declare security with secure() or open()',
-                    $this->name
-                )
-            );
-        }
-
-        // Register the route with the router
-        call_user_func([$this->router, $this->method], $this->path, $this->callback);
-
-        // Attach route-specific middleware
         foreach ($this->middleware as $middleware) {
             $this->router->middleware($middleware);
         }
 
         $this->routeRegistered = true;
+
+        return $this;
     }
 
     /**
-     * Get current group information from router
+     * Adopt the enclosing group's security posture when the route declared none.
      */
-    private function getCurrentGroupInfo(): ?array
+    private function inheritGroupSecurity(): void
     {
-        $groupStack = $this->router->getGroupStack();
+        if ($this->securityConfigured || !$this->inheritGroupSecurity) {
+            return;
+        }
 
-        if (empty($groupStack)) {
+        $group = $this->currentGroup();
+
+        if ($group === null) {
+            return;
+        }
+
+        if ($group['auth'] === true) {
+            $this->middleware[] = new AuthMiddleware($this->resolveAuthManager(), []);
+            $this->securityConfigured = true;
+
+            return;
+        }
+
+        if ($group['open'] !== null) {
+            $this->middleware[] = new AuthMiddleware($this->resolveAuthManager(), $group['open']);
+            $this->securityConfigured = true;
+        }
+    }
+
+    /**
+     * Fail loudly when a web route never declared a security posture.
+     *
+     * Console runs are exempt so `juice routes` can still inspect an application
+     * whose routes are mid-refactor; the inspector reports them as undeclared.
+     *
+     * @throws \RuntimeException When a web route has no security posture
+     */
+    private function assertSecurityDeclared(): void
+    {
+        if ($this->securityConfigured || PHP_SAPI === 'cli') {
+            return;
+        }
+
+        throw new \RuntimeException(sprintf(
+            'Route "%s" must declare its security with secure(), open() or public().',
+            $this->name
+        ));
+    }
+
+    /**
+     * Resolve the auth manager from the application or from Haven.
+     */
+    private function resolveAuthManager(): ?AuthManager
+    {
+        if (isset(Application::$app) && Application::$app->auth !== null) {
+            return Application::$app->auth;
+        }
+
+        $haven = 'Luxid\\Haven\\Haven';
+
+        if (class_exists($haven) && $haven::isInitialized()) {
+            return $haven::getManager();
+        }
+
+        return null;
+    }
+
+    /**
+     * Get the innermost group's security posture.
+     *
+     * @return array{auth: bool, open: list<string>|null}|null
+     */
+    private function currentGroup(): ?array
+    {
+        $stack = $this->router->getGroupStack();
+
+        if ($stack === []) {
             return null;
         }
 
-        $currentGroup = end($groupStack);
+        $group = end($stack);
 
         return [
-            'auth' => $currentGroup['auth'] ?? false,
-            'open' => $currentGroup['open'] ?? null,
+            'auth' => (bool) ($group['auth'] ?? false),
+            'open' => $group['open'] ?? null,
         ];
     }
 
     /**
-     * Extract activity name from callback
+     * Check whether this route declared a security posture.
      */
-    private function extractActivityFromCallback(): string
+    public function isSecurityConfigured(): bool
     {
-        if (is_array($this->callback) && isset($this->callback[1])) {
-            return $this->callback[1];
-        }
-
-        return 'index';
+        return $this->securityConfigured;
     }
 
     /**
-     * Add AuthMiddleware with appropriate configuration
-     * This is the legacy method for backward compatibility
-     */
-    private function addAuthMiddleware(array $publicActivities = []): void
-    {
-        // For backward compatibility, create AuthMiddleware without AuthManager
-        // The AuthMiddleware will need to handle null AuthManager gracefully
-        $this->middleware[] = new AuthMiddleware($publicActivities);
-    }
-
-    /**
-     * Add PublicMiddleware for truly public routes
-     */
-    private function addPublicMiddleware(): void
-    {
-        $this->middleware[] = new PublicMiddleware();
-    }
-
-    /**
-     * Get the route name
+     * Get the route name.
      */
     public function getName(): string
     {
