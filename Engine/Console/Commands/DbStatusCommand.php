@@ -18,17 +18,20 @@ class DbStatusCommand extends Command
         // Try to connect to database
         try {
             $this->setupApplication();
-            $db = \Luxid\Foundation\Application::$app->db;
+
+            // db() opens the connection on demand; the property is null until
+            // something actually needs the database.
+            $pdo = \Luxid\Foundation\Application::$app->db()->getPdo();
 
             // Get database info
-            $stmt = $db->pdo->query("SELECT DATABASE() as db_name, VERSION() as version");
+            $stmt = $pdo->query("SELECT DATABASE() as db_name, VERSION() as version");
             $info = $stmt->fetch(\PDO::FETCH_ASSOC);
 
             $this->line("📊 \033[1;33mDatabase:\033[0m " . ($info['db_name'] ?? 'Unknown'));
             $this->line("📦 \033[1;33mVersion:\033[0m " . ($info['version'] ?? 'Unknown'));
 
             // Get tables
-            $stmt = $db->pdo->query("SHOW TABLES");
+            $stmt = $pdo->query("SHOW TABLES");
             $tables = $stmt->fetchAll(\PDO::FETCH_COLUMN);
 
             $this->line("📋 \033[1;33mTables:\033[0m " . count($tables));
@@ -38,7 +41,7 @@ class DbStatusCommand extends Command
                 $this->line("\033[1;34mTable List:\033[0m");
                 foreach ($tables as $table) {
                     // Get row count for each table
-                    $countStmt = $db->pdo->query("SELECT COUNT(*) as count FROM `{$table}`");
+                    $countStmt = $pdo->query("SELECT COUNT(*) as count FROM `{$table}`");
                     $count = $countStmt->fetch(\PDO::FETCH_ASSOC)['count'];
                     $this->line("  📁 {$table} \033[90m({$count} rows)\033[0m");
                 }
@@ -47,7 +50,7 @@ class DbStatusCommand extends Command
             // Check migrations table
             $migrationsTableExists = in_array('migrations', $tables);
             if ($migrationsTableExists) {
-                $migStmt = $db->pdo->query("SELECT migration_id, applied_at FROM migrations ORDER BY applied_at DESC LIMIT 5");
+                $migStmt = $pdo->query("SELECT migration_id, applied_at FROM migrations ORDER BY applied_at DESC LIMIT 5");
                 $migrations = $migStmt->fetchAll(\PDO::FETCH_ASSOC);
 
                 $this->line("");
@@ -61,8 +64,9 @@ class DbStatusCommand extends Command
 
             $this->success("Database connection successful!");
 
-        } catch (\PDOException $e) {
-            $this->error("Database connection failed: " . $e->getMessage());
+        } catch (\Rocket\Connection\ConnectionException | \PDOException $e) {
+            // Rocket wraps the driver exception, so both types are caught here.
+            $this->error($e->getMessage());
             $this->line("");
             $this->line("\033[1;33m💡 Troubleshooting:\033[0m");
             $this->line("1. Check .env file exists");
