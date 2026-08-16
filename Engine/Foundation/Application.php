@@ -1,53 +1,133 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Luxid\Foundation;
 
-use Luxid\Routing\Router;
-use Luxid\Http\Response;
-use Luxid\Http\Request;
-use Luxid\Http\SessionInterface;
-use Rocket\Connection\Connection;
-use Luxid\Database\DbEntity;
 use Luxid\Contracts\Auth\AuthManager;
+use Luxid\Database\DbEntity;
+use Luxid\Exceptions\MethodNotAllowedException;
+use Luxid\Exceptions\NotFoundException;
+use Luxid\Http\NullSession;
+use Luxid\Http\Request;
+use Luxid\Http\Response;
+use Luxid\Http\Session;
+use Luxid\Http\SessionInterface;
+use Luxid\Middleware\CorsMiddleware;
+use Luxid\Middleware\SessionMiddleware;
+use Luxid\Routing\Router;
+use Rocket\Connection\Connection;
+use Throwable;
 
+/**
+ * The application kernel.
+ *
+ * Owns the request/response pair, the router, the database connection and the
+ * package providers discovered from Composer metadata.
+ *
+ * @package Luxid\Foundation
+ */
 class Application
 {
+    /**
+     * Absolute path to the project root.
+     */
     public static string $ROOT_DIR;
-    public string $frame = 'app';
-    public string $userClass;
-    public Router $router;
-    public Request $request;
-    public Response $response;
-    public ?SessionInterface $session = null;
+
+    /**
+     * The active application instance.
+     */
     public static Application $app;
+
+    /**
+     * Default frame (layout) used when an action does not pick one.
+     */
+    public string $frame = 'app';
+
+    /**
+     * Entity class backing the authenticated user.
+     *
+     * @var class-string
+     */
+    public string $userClass;
+
+    /**
+     * The router handling this request.
+     */
+    public Router $router;
+
+    /**
+     * The current request.
+     */
+    public Request $request;
+
+    /**
+     * The current response.
+     */
+    public Response $response;
+
+    /**
+     * The session, resolved lazily by {@see Application::getSession()}.
+     */
+    public ?SessionInterface $session = null;
+
+    /**
+     * The action handling the current request, once resolved.
+     */
     public ?Action $action = null;
+
+    /**
+     * The database connection, when one is configured.
+     */
     public ?Connection $db = null;
+
+    /**
+     * The authenticated user, when one is signed in.
+     */
     public ?DbEntity $user = null;
+
+    /**
+     * The legacy screen renderer.
+     */
     public Screen $screen;
+
+    /**
+     * The auth manager contributed by a package such as Haven.
+     */
     public ?AuthManager $auth = null;
 
     /**
-     * Registered package providers
+     * Whether uncaught exceptions should render their trace.
+     */
+    public bool $debug = false;
+
+    /**
+     * Provider classes discovered from installed packages.
+     *
+     * @var list<class-string>
      */
     protected array $providers = [];
 
-    public function __construct($rootPath, array $config)
+    /**
+     * @param string               $rootPath Absolute path to the project root
+     * @param array<string, mixed> $config   Application configuration
+     */
+    public function __construct(string $rootPath, array $config)
     {
-        $this->userClass = $config['userClass'];
-
         self::$ROOT_DIR = $rootPath;
         self::$app = $this;
 
+        $this->userClass = $config['userClass'] ?? '';
+        $this->debug = (bool) ($config['debug'] ?? false);
+
         $this->request = new Request();
         $this->response = new Response();
-
-        $this->session = null;
-
-        $this->router = new Router($this->request, $this->response);
-        $this->router->addApiGlobalMiddleware(new \Luxid\Middleware\CorsMiddleware());
         $this->screen = new Screen();
 
-        // Initialize Rocket connection
+        $this->router = new Router($this->request, $this->response);
+        $this->router->addGlobalMiddleware(new SessionMiddleware());
+        $this->router->addApiGlobalMiddleware(new CorsMiddleware($config['cors'] ?? []));
+
         if (isset($config['db'])) {
             Connection::initialize($config['db']);
             $this->db = Connection::getInstance();
@@ -58,159 +138,226 @@ class Application
     }
 
     /**
-     * Discover providers from installed packages
+     * Discover provider classes declared under `extra.luxid.providers`.
      */
     protected function discoverProviders(): void
     {
-        $vendorDir = self::$ROOT_DIR . '/vendor';
-        $installedPath = $vendorDir . '/composer/installed.json';
+        $installedPath = self::$ROOT_DIR . '/vendor/composer/installed.json';
 
-        if (!file_exists($installedPath)) {
+        if (!is_file($installedPath)) {
             return;
         }
 
-        $installed = json_decode(file_get_contents($installedPath), true);
+        $installed = json_decode((string) file_get_contents($installedPath), true);
 
-        // Handle different composer.json formats
-        $packages = $installed['packages'] ?? $installed;
+        if (!is_array($installed)) {
+            return;
+        }
 
-        foreach ($packages as $package) {
-            if (isset($package['extra']['luxid']['providers'])) {
-                foreach ($package['extra']['luxid']['providers'] as $provider) {
-                    if (class_exists($provider)) {
-                        $this->providers[] = $provider;
-                    }
+        foreach ($installed['packages'] ?? $installed as $package) {
+            foreach ($package['extra']['luxid']['providers'] ?? [] as $provider) {
+                if (class_exists($provider)) {
+                    $this->providers[] = $provider;
                 }
             }
         }
     }
 
     /**
-     * Register all discovered providers
+     * Register then boot every discovered provider.
+     *
+     * Providers are instantiated once and reused across both phases so state set
+     * during `register()` survives into `boot()`.
      */
     protected function registerProviders(): void
     {
+        $instances = [];
+
         foreach ($this->providers as $provider) {
             $instance = new $provider();
+            $instances[] = $instance;
 
             if (method_exists($instance, 'register')) {
                 $instance->register($this);
             }
         }
 
-        // Boot providers after all are registered
-        foreach ($this->providers as $provider) {
-            $instance = new $provider();
-
+        foreach ($instances as $instance) {
             if (method_exists($instance, 'boot')) {
                 $instance->boot($this);
             }
         }
     }
 
+    /**
+     * Bind an auth manager contributed by a package.
+     *
+     * @param AuthManager $auth Auth manager implementation
+     */
     public function registerAuth(AuthManager $auth): void
     {
         $this->auth = $auth;
     }
 
-    public static function isGuest()
+    /**
+     * Check whether the current request is unauthenticated.
+     */
+    public static function isGuest(): bool
     {
-        return !self::$app->user;
+        return !isset(self::$app) || self::$app->user === null;
     }
 
-    public function run()
+    /**
+     * Handle the current request and flush the response.
+     *
+     * Returns the body as well so adapters that manage their own output, such as
+     * the FrankenPHP worker, can take it without a second render.
+     */
+    public function run(): string
+    {
+        $body = $this->handle();
+
+        $this->response->send($body);
+
+        return $body;
+    }
+
+    /**
+     * Resolve the current request into a response body.
+     */
+    public function handle(): string
     {
         try {
             return $this->router->resolve();
-        } catch (\Exception $e) {
+        } catch (Throwable $e) {
             return $this->handleException($e);
         }
     }
 
-    protected function handleException(\Exception $e): string
+    /**
+     * Convert an uncaught exception into a response body.
+     *
+     * @param Throwable $e The uncaught exception
+     */
+    protected function handleException(Throwable $e): string
     {
         $code = $this->getHttpCode($e);
         $this->response->setStatusCode($code);
 
-        $path = $this->request->getPath();
-        $isApiRequest = strpos($path, '/api/') === 0;
-
-        if ($isApiRequest) {
-            return json_encode([
+        if ($this->request->wantsJson() || str_starts_with($this->request->getPath(), '/api/')) {
+            return $this->response->json([
                 'success' => false,
                 'message' => $e->getMessage(),
                 'code' => $code,
-            ]);
+            ], $code);
         }
 
-        return $this->screen->renderScreen('_error', ['exception' => $e]);
+        return (string) $this->screen->renderScreen('_error', [
+            'exception' => $e,
+            'code' => $code,
+            'debug' => $this->debug,
+        ]);
     }
 
-    protected function getHttpCode(\Exception $e): int
+    /**
+     * Map an exception onto an HTTP status code.
+     *
+     * @param Throwable $e The uncaught exception
+     */
+    protected function getHttpCode(Throwable $e): int
     {
-        $code = $e->getCode();
+        $code = (int) $e->getCode();
 
-        if (!is_int($code)) {
-            $code = (int) $code;
+        if ($code >= 100 && $code <= 599) {
+            return $code;
         }
 
-        if ($code < 100 || $code > 599) {
-            if ($e instanceof \PDOException) {
-                return 500;
-            }
-            return $e instanceof \Luxid\Exceptions\NotFoundException ? 404 : 500;
-        }
-
-        return $code;
+        return match (true) {
+            $e instanceof NotFoundException => 404,
+            $e instanceof MethodNotAllowedException => 405,
+            default => 500,
+        };
     }
 
-    // getter | setter ==================================
-    public function getAction()
+    /**
+     * Get the action handling the current request.
+     */
+    public function getAction(): ?Action
     {
         return $this->action;
     }
 
-    public function setAction(Action $action)
+    /**
+     * Set the action handling the current request.
+     *
+     * @param Action $action Resolved action
+     */
+    public function setAction(Action $action): void
     {
         $this->action = $action;
     }
-    // =============================================
 
-    public function login(DbEntity $user)
+    /**
+     * Sign a user in for the current session.
+     *
+     * The session id is rotated first so a fixated id cannot survive the
+     * privilege change.
+     *
+     * @param DbEntity $user The user to sign in
+     */
+    public function login(DbEntity $user): bool
     {
-        $this->user = $user;
-        $primaryKey = $user->primaryKey();
-        $primaryValue = $user->{$primaryKey};
+        $session = $this->getSession();
+        $session->regenerate();
 
-        $this->getSession()->set('user', $primaryValue);
+        $this->user = $user;
+        $session->set('user', $user->{$user->primaryKey()});
 
         return true;
     }
 
-    public function logout()
+    /**
+     * Sign the current user out and rotate the session id.
+     */
+    public function logout(): void
     {
+        $session = $this->getSession();
+
         $this->user = null;
-        $this->getSession()->remove('user');
+        $session->remove('user');
+        $session->regenerate();
     }
 
+    /**
+     * Resolve the session, hydrating the authenticated user on first access.
+     */
     public function getSession(): SessionInterface
     {
-        if ($this->session === null) {
-            if (php_sapi_name() !== 'cli') {
-                $this->session = new \Luxid\Http\Session();
-            } else {
-                $this->session = new \Luxid\Http\NullSession();
-            }
-
-            // Load user from session if available
-            if ($this->session->isStarted()) {
-                $primaryValue = $this->session->get('user');
-                if ($primaryValue !== null) {
-                    $primaryKey = $this->userClass::primaryKey();
-                    $this->user = $this->userClass::findOne([$primaryKey => $primaryValue]) ?? null;
-                }
-            }
+        if ($this->session !== null) {
+            return $this->session;
         }
+
+        $this->session = PHP_SAPI === 'cli' ? new NullSession() : new Session();
+
+        if ($this->session->isStarted()) {
+            $this->hydrateUser();
+        }
+
         return $this->session;
+    }
+
+    /**
+     * Load the authenticated user referenced by the session, if any.
+     */
+    protected function hydrateUser(): void
+    {
+        $identifier = $this->session?->get('user');
+
+        if ($identifier === null || $this->userClass === '' || !class_exists($this->userClass)) {
+            return;
+        }
+
+        $primaryKey = $this->userClass::primaryKey();
+        $this->user = $this->userClass::findOne([$primaryKey => $identifier]) ?: null;
     }
 }
