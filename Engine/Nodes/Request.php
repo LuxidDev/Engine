@@ -1,54 +1,70 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Luxid\Nodes;
 
 use Luxid\Foundation\Application;
 use Luxid\Http\Request as HttpRequest;
 
+/**
+ * Static facade over the request-scoped {@see HttpRequest}.
+ *
+ * @package Luxid\Nodes
+ */
 class Request
 {
     /**
-     * Get the current Request instance from the application container
+     * Resolve the current request.
      *
-     * @return HttpRequest
+     * @throws \RuntimeException When the application has not booted yet
      */
     protected static function instance(): HttpRequest
     {
-        if (!Application::$app || !Application::$app->request) {
-            throw new \RuntimeException("No request instance available in Application.");
+        if (!isset(Application::$app)) {
+            throw new \RuntimeException('No request instance available; the application has not booted.');
         }
 
         return Application::$app->request;
     }
 
     /**
-     * Get query parameter(s) (from $_GET)
+     * Get one or all query string parameters.
      *
-     * @param string|null $key
-     * @param mixed $default
-     * @return mixed
+     * @param string|null $key     Parameter name, or null for the whole array
+     * @param mixed       $default Value returned when the key is absent
      */
-    public static function query(string $key = null, $default = null)
+    public static function query(?string $key = null, mixed $default = null): mixed
     {
         return self::instance()->query($key, $default);
     }
 
     /**
-     * Get input/body parameter(s) (from POST/PUT/PATCH)
+     * Get one or all body parameters.
      *
-     * @param string|null $key
-     * @param mixed $default
-     * @return mixed
+     * @param string|null $key     Parameter name, or null for the whole array
+     * @param mixed       $default Value returned when the key is absent
      */
-    public static function input(string $key = null, $default = null)
+    public static function input(?string $key = null, mixed $default = null): mixed
     {
         return self::instance()->input($key, $default);
     }
 
     /**
-     * Get all request parameters (merged GET + body)
+     * Get a single value from the request data.
      *
-     * @return array
+     * @param string $key     Parameter name
+     * @param mixed  $default Value returned when the key is absent
+     */
+    public static function get(string $key, mixed $default = null): mixed
+    {
+        return self::instance()->get($key, $default);
+    }
+
+    /**
+     * Get every request parameter.
+     *
+     * @return array<string, mixed>
      */
     public static function all(): array
     {
@@ -56,10 +72,21 @@ class Request
     }
 
     /**
-     * Check if request contains a specific key
+     * Get a subset of the request data.
      *
-     * @param string $key
-     * @return bool
+     * @param list<string> $keys Parameter names to keep
+     *
+     * @return array<string, mixed>
+     */
+    public static function only(array $keys): array
+    {
+        return self::instance()->only($keys);
+    }
+
+    /**
+     * Check whether a key is present in the request data.
+     *
+     * @param string $key Parameter name
      */
     public static function has(string $key): bool
     {
@@ -67,9 +94,15 @@ class Request
     }
 
     /**
-     * Get request method (get, post, put, patch, delete)
-     *
-     * @return string
+     * Get the request path.
+     */
+    public static function path(): string
+    {
+        return self::instance()->getPath();
+    }
+
+    /**
+     * Get the lowercased HTTP method.
      */
     public static function method(): string
     {
@@ -77,7 +110,7 @@ class Request
     }
 
     /**
-     * Shortcut to check if GET
+     * Check whether this is a GET request.
      */
     public static function isGet(): bool
     {
@@ -85,7 +118,7 @@ class Request
     }
 
     /**
-     * Shortcut to check if POST
+     * Check whether this is a POST request.
      */
     public static function isPost(): bool
     {
@@ -93,10 +126,18 @@ class Request
     }
 
     /**
-     * Shortcut to check if JSON request
+     * Check whether the request carries a JSON body.
      */
     public static function isJson(): bool
     {
         return self::instance()->isJson();
+    }
+
+    /**
+     * Check whether the request was issued by a JavaScript client.
+     */
+    public static function isAjax(): bool
+    {
+        return self::instance()->isAjax();
     }
 }
