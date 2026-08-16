@@ -35,6 +35,21 @@ class Response
     protected bool $sent = false;
 
     /**
+     * Whether JSON bodies are formatted for humans.
+     *
+     * Off by default. Pretty printing an API response costs about a quarter
+     * more CPU and roughly triples the bytes on the wire, which every client
+     * then pays to download — for whitespace no program reads. The kernel turns
+     * it on when the application is in debug mode.
+     */
+    protected static bool $prettyPrint = false;
+
+    /**
+     * Encoding flags applied to every JSON body.
+     */
+    private const JSON_FLAGS = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR;
+
+    /**
      * Set the HTTP status code.
      *
      * @param int $code Status code between 100 and 599
@@ -167,7 +182,27 @@ class Response
         $this->setStatusCode($statusCode);
         $this->setHeader('Content-Type', 'application/json');
 
-        return (string) json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        $flags = self::$prettyPrint ? self::JSON_FLAGS | JSON_PRETTY_PRINT : self::JSON_FLAGS;
+
+        return (string) json_encode($data, $flags);
+    }
+
+    /**
+     * Turn human-readable JSON formatting on or off for every response.
+     *
+     * @param bool $enabled Whether to pretty print
+     */
+    public static function prettyPrintJson(bool $enabled = true): void
+    {
+        self::$prettyPrint = $enabled;
+    }
+
+    /**
+     * Check whether JSON bodies are pretty printed.
+     */
+    public static function prettyPrintsJson(): bool
+    {
+        return self::$prettyPrint;
     }
 
     /**

@@ -133,6 +133,9 @@ class Application
         $this->userClass = $config['userClass'] ?? '';
         $this->debug = (bool) ($config['debug'] ?? false);
 
+        // Readable JSON while developing; compact on the wire in production.
+        Response::prettyPrintJson($config['pretty_json'] ?? $this->debug);
+
         $this->request = new Request();
         $this->response = new Response();
         $this->screen = new Screen();
