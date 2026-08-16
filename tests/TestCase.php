@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Luxid\Tests;
 
 use Luxid\Console\CliApplication;
+use Luxid\Foundation\Application;
 use PHPUnit\Framework\TestCase as BaseTestCase;
 
 /**
@@ -20,8 +21,10 @@ abstract class TestCase extends BaseTestCase
 {
     /**
      * The kernel under test.
+     *
+     * Typed to the base kernel so a test can swap in a web-flavoured one.
      */
-    protected CliApplication $app;
+    protected Application $app;
 
     /**
      * Boot a fresh kernel and clear request state.

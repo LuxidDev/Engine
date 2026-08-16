@@ -40,6 +40,8 @@ class CliApplication extends Application
         $this->session = new NullSession();
         $this->screen = new Screen();
         $this->router = new Router($this->request, $this->response);
+
+        $this->registerRequestScope();
     }
 
     /**
