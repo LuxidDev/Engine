@@ -63,13 +63,7 @@ trait ActionHelpers
      */
     protected function db(): Connection
     {
-        $connection = Application::$app->db;
-
-        if ($connection === null) {
-            throw new \RuntimeException('No database connection configured for this application.');
-        }
-
-        return $connection;
+        return Application::$app->db();
     }
 
     /**

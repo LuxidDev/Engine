@@ -77,7 +77,9 @@ class Application
     public ?Action $action = null;
 
     /**
-     * The database connection, when one is configured.
+     * The database connection, once something has needed it.
+     *
+     * Prefer {@see Application::db()}, which opens the connection on demand.
      */
     public ?Connection $db = null;
 
@@ -135,8 +137,9 @@ class Application
         $this->router->addApiGlobalMiddleware(new CorsMiddleware($config['cors'] ?? []));
 
         if (isset($config['db'])) {
-            Connection::initialize($config['db']);
-            $this->db = Connection::getInstance();
+            // Configured, not opened: a route that never queries the database
+            // should not fail because the database is unreachable.
+            Connection::configure($config['db']);
         }
 
         $this->discoverProviders();
@@ -334,6 +337,16 @@ class Application
         $this->user = null;
         $session->remove('user');
         $session->regenerate();
+    }
+
+    /**
+     * Get the database connection, opening it on first use.
+     *
+     * @throws \RuntimeException When no database is configured
+     */
+    public function db(): Connection
+    {
+        return $this->db ??= Connection::getInstance();
     }
 
     /**
