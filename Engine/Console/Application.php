@@ -79,23 +79,13 @@ class Application
      */
     private function discoverPackageCommands(): void
     {
-        $vendorDir = dirname(__DIR__, 2) . '/vendor';
-        $installedPath = $vendorDir . '/composer/installed.json';
+        // The project being operated on is the working directory; the engine may
+        // be running from its own checkout or from inside that project's vendor.
+        $manifest = new \Luxid\Foundation\PackageManifest(getcwd() . '/vendor');
 
-        if (!file_exists($installedPath)) {
-            return;
-        }
-
-        $installed = json_decode(file_get_contents($installedPath), true);
-        $packages = $installed['packages'] ?? $installed;
-
-        foreach ($packages as $package) {
-            if (isset($package['extra']['luxid']['commands'])) {
-                foreach ($package['extra']['luxid']['commands'] as $name => $commandClass) {
-                    if (class_exists($commandClass)) {
-                        $this->packageCommands[$name] = $commandClass;
-                    }
-                }
+        foreach ($manifest->commands() as $name => $commandClass) {
+            if (class_exists($commandClass)) {
+                $this->packageCommands[$name] = $commandClass;
             }
         }
     }
