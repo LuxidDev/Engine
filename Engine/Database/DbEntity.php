@@ -1,155 +1,307 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Luxid\Database;
 
-use Luxid\ORM\Entity;
 use Luxid\Foundation\Application;
+use Luxid\ORM\Entity;
+use PDO;
+use PDOStatement;
 
 /**
- * Base Active Record Class (extends Luxid\ORM\Entity)
- * This would be an entity which would be like an ORM
- * and would map the User's Entity into the Database Table.
+ * Legacy Active Record base class.
+ *
+ * Predates Rocket ORM and remains for applications that have not migrated. New
+ * entities should extend `Rocket\ORM\Entity`, which is attribute driven and
+ * carries relations, migrations and seeding.
+ *
+ * Column names reaching SQL are validated against {@see DbEntity::attributes()}
+ * so a `where` array assembled from request data cannot smuggle in an
+ * identifier: values are bound, but identifiers cannot be.
  *
  * @property int $id The primary key
- * @method bool save() Save the entity
- * @method bool update() Update the entity
- * @method bool delete() Delete the entity
- * @method static static|null findOne(array $where) Find one entity
- * @method static array findAll(array $where = [], string $orderBy = '') Find all entities
- * @method static static|null find(int $id) Find by ID
+ *
+ * @package Luxid\Database
  */
 abstract class DbEntity extends Entity
 {
+    /**
+     * Name of the backing table.
+     */
     abstract public static function tableName(): string;
-    abstract public function attributes(): array; // -> all db column names
+
+    /**
+     * Every database column mapped by this entity.
+     *
+     * @return list<string>
+     */
+    abstract public function attributes(): array;
+
+    /**
+     * Name of the primary key column.
+     */
     abstract public static function primaryKey(): string;
 
+    /**
+     * Insert the entity as a new row.
+     */
     public function save(): bool
     {
-        $tableName = $this->tableName();
+        $table = static::tableName();
         $attributes = $this->attributes();
+        $placeholders = array_map(static fn (string $attr): string => ':' . $attr, $attributes);
 
-        $params = array_map(fn($attr) => ":$attr", $attributes);
-
-        $statement = self::prepare("
-            INSERT INTO $tableName (".implode(',', $attributes).")
-            VALUES(".implode(',', $params) . ")
-        ");
+        $statement = static::prepare(sprintf(
+            'INSERT INTO %s (%s) VALUES (%s)',
+            $table,
+            implode(', ', $attributes),
+            implode(', ', $placeholders)
+        ));
 
         foreach ($attributes as $attribute) {
-            $value = $this->{$attribute} ?? null;
-
-            // Normalize booleans for MySQL
-            if (is_bool($value)) {
-                $value = $value ? 1 : 0;
-            }
-
-            $statement->bindValue(":$attribute", $value);
+            $statement->bindValue(':' . $attribute, $this->normalize($this->{$attribute} ?? null));
         }
 
-        $statement->execute();
+        if (!$statement->execute()) {
+            return false;
+        }
 
-        // set the ID if this is a new record
-        if ($this->{static::primaryKey()} === 0) {
-            $this->{static::primaryKey()} = self::lastInsertId();
+        $primaryKey = static::primaryKey();
+
+        // Only claim the generated id when the entity did not carry one already.
+        if (empty($this->{$primaryKey} ?? null)) {
+            $this->{$primaryKey} = static::lastInsertId();
         }
 
         return true;
     }
 
+    /**
+     * Persist changes to an existing row.
+     */
     public function update(): bool
     {
-        $tableName = $this->tableName();
         $primaryKey = static::primaryKey();
-        $attributes = $this->attributes();
+        $columns = array_filter(
+            $this->attributes(),
+            static fn (string $attr): bool => $attr !== $primaryKey
+        );
 
-        // Remove primary key from update attributes
-        $updateAttributes = array_filter($attributes, fn($attr) => $attr !== $primaryKey);
-
-        $setClause = implode(', ', array_map(fn($attr) => "$attr = :$attr", $updateAttributes));
-
-        $statement = self::prepare("
-            UPDATE $tableName
-            SET $setClause
-            WHERE $primaryKey = :id
-        ");
-
-        foreach ($updateAttributes as $attribute) {
-            $statement->bindValue(":$attribute", $this->{$attribute});
+        if ($columns === []) {
+            return false;
         }
-        $statement->bindValue(":id", $this->{$primaryKey});
+
+        $assignments = implode(', ', array_map(
+            static fn (string $attr): string => $attr . ' = :' . $attr,
+            $columns
+        ));
+
+        $statement = static::prepare(sprintf(
+            'UPDATE %s SET %s WHERE %s = :__pk',
+            static::tableName(),
+            $assignments,
+            $primaryKey
+        ));
+
+        foreach ($columns as $attribute) {
+            $statement->bindValue(':' . $attribute, $this->normalize($this->{$attribute} ?? null));
+        }
+
+        $statement->bindValue(':__pk', $this->{$primaryKey});
 
         return $statement->execute();
     }
 
+    /**
+     * Delete the row backing this entity.
+     */
     public function delete(): bool
     {
-        $tableName = $this->tableName();
         $primaryKey = static::primaryKey();
 
-        $statement = self::prepare("
-            DELETE FROM $tableName
-            WHERE $primaryKey = :id
-        ");
+        $statement = static::prepare(sprintf(
+            'DELETE FROM %s WHERE %s = :__pk',
+            static::tableName(),
+            $primaryKey
+        ));
 
-        $statement->bindValue(":id", $this->{$primaryKey});
+        $statement->bindValue(':__pk', $this->{$primaryKey});
 
         return $statement->execute();
     }
 
-    public static function findOne($where): bool|object|null  // -> [email => jhay@gmail.com, firstname => jhay]
+    /**
+     * Find the first row matching every given column.
+     *
+     * @param array<string, mixed> $where Column/value pairs combined with AND
+     *
+     * @throws \InvalidArgumentException When a column is not mapped by this entity
+     */
+    public static function findOne(array $where): ?static
     {
-        $tableName = static::tableName();
-        $attributes = array_keys($where);
-        $sql = implode(" AND ", array_map(fn($attr) => "$attr = :$attr", $attributes));
+        if ($where === []) {
+            return null;
+        }
 
-        // SELECT * FROM $tableName WHERE email = :email AND firstname = :firstname
-        $statement = static::prepare("SELECT * FROM $tableName WHERE $sql");
-        foreach ($where as $key => $item) {
-            $statement->bindValue(":$key", $item);
+        $columns = static::assertColumns(array_keys($where));
+
+        $statement = static::prepare(sprintf(
+            'SELECT * FROM %s WHERE %s LIMIT 1',
+            static::tableName(),
+            implode(' AND ', array_map(static fn (string $c): string => $c . ' = :' . $c, $columns))
+        ));
+
+        foreach ($where as $column => $value) {
+            $statement->bindValue(':' . $column, $value);
         }
 
         $statement->execute();
-        return $statement->fetchObject(static::class) ?: null;  // gives me an instance of the user class
+
+        return $statement->fetchObject(static::class) ?: null;
     }
 
-    public static function findAll(array $where = [], string $orderBy = ''): array
+    /**
+     * Find every row matching the given columns.
+     *
+     * @param array<string, mixed> $where   Column/value pairs combined with AND
+     * @param string               $orderBy Column to sort by; must be a mapped column
+     * @param string               $direction Sort direction, `ASC` or `DESC`
+     *
+     * @return list<static>
+     *
+     * @throws \InvalidArgumentException When a column or direction is not valid
+     */
+    public static function findAll(array $where = [], string $orderBy = '', string $direction = 'ASC'): array
     {
-        $tableName = static::tableName();
-        $sql = "SELECT * FROM $tableName";
+        $sql = 'SELECT * FROM ' . static::tableName();
 
-        if (!empty($where)) {
-            $attributes = array_keys($where);
-            $whereClause = implode(" AND ", array_map(fn($attr) => "$attr = :$attr", $attributes));
-            $sql .= " WHERE $whereClause";
+        if ($where !== []) {
+            $columns = static::assertColumns(array_keys($where));
+            $sql .= ' WHERE ' . implode(
+                ' AND ',
+                array_map(static fn (string $c): string => $c . ' = :' . $c, $columns)
+            );
         }
 
-        if (!empty($orderBy)) {
-            $sql .= " ORDER BY $orderBy";
+        if ($orderBy !== '') {
+            // Identifiers cannot be bound, so the column is checked against the
+            // entity's own column list and the direction against a fixed set.
+            $sql .= ' ORDER BY ' . static::assertColumns([$orderBy])[0] . ' ' . static::assertDirection($direction);
         }
 
         $statement = static::prepare($sql);
 
-        foreach ($where as $key => $item) {
-            $statement->bindValue(":$key", $item);
+        foreach ($where as $column => $value) {
+            $statement->bindValue(':' . $column, $value);
         }
 
         $statement->execute();
-        return $statement->fetchAll(\PDO::FETCH_CLASS, static::class);
+
+        return $statement->fetchAll(PDO::FETCH_CLASS, static::class);
     }
 
-    public static function find(int $id): ?static
+    /**
+     * Find a row by primary key.
+     *
+     * @param int|string $id Primary key value
+     */
+    public static function find(int|string $id): ?static
     {
         return static::findOne([static::primaryKey() => $id]);
     }
 
-    public static function prepare($sqlStatement)
+    /**
+     * Reject any column this entity does not map.
+     *
+     * @param list<string> $columns Candidate column names
+     *
+     * @return list<string> The validated columns
+     *
+     * @throws \InvalidArgumentException When a column is not mapped
+     */
+    protected static function assertColumns(array $columns): array
     {
-        return Application::$app->db->pdo->prepare($sqlStatement);
+        $allowed = (new static())->attributes();
+
+        foreach ($columns as $column) {
+            if (!in_array($column, $allowed, true)) {
+                throw new \InvalidArgumentException(sprintf(
+                    'Unknown column "%s" for %s',
+                    $column,
+                    static::class
+                ));
+            }
+        }
+
+        return array_values($columns);
     }
 
+    /**
+     * Reject any sort direction other than ASC or DESC.
+     *
+     * @param string $direction Candidate direction
+     *
+     * @throws \InvalidArgumentException When the direction is not recognised
+     */
+    protected static function assertDirection(string $direction): string
+    {
+        $direction = strtoupper(trim($direction));
+
+        if (!in_array($direction, ['ASC', 'DESC'], true)) {
+            throw new \InvalidArgumentException(sprintf('Invalid sort direction "%s"', $direction));
+        }
+
+        return $direction;
+    }
+
+    /**
+     * Coerce PHP values into something PDO can bind.
+     *
+     * @param mixed $value Raw property value
+     */
+    protected function normalize(mixed $value): mixed
+    {
+        return is_bool($value) ? (int) $value : $value;
+    }
+
+    /**
+     * Prepare a statement on the application connection.
+     *
+     * Goes through `getPdo()` rather than reaching for a `$pdo` property, which
+     * is protected on Rocket's connection and previously made every query here
+     * fail at runtime.
+     *
+     * @param string $sql SQL to prepare
+     *
+     * @throws \RuntimeException When no database is configured
+     */
+    public static function prepare(string $sql): PDOStatement
+    {
+        return static::pdo()->prepare($sql);
+    }
+
+    /**
+     * Get the id generated by the most recent insert.
+     */
     public static function lastInsertId(): int
     {
-        return (int) Application::$app->db->pdo->lastInsertId();
+        return (int) static::pdo()->lastInsertId();
+    }
+
+    /**
+     * Resolve the PDO handle behind the application connection.
+     *
+     * @throws \RuntimeException When no database is configured
+     */
+    protected static function pdo(): PDO
+    {
+        $connection = Application::$app->db ?? null;
+
+        if ($connection === null) {
+            throw new \RuntimeException('No database connection configured for this application.');
+        }
+
+        return $connection->getPdo();
     }
 }
