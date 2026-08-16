@@ -281,6 +281,8 @@ class Application
         return match (true) {
             $e instanceof NotFoundException => 404,
             $e instanceof MethodNotAllowedException => 405,
+            $e instanceof \Luxid\Exceptions\UnauthorizedException => 401,
+            $e instanceof \Luxid\Exceptions\ForbiddenException => 403,
             default => 500,
         };
     }
