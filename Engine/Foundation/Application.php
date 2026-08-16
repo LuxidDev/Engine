@@ -147,8 +147,44 @@ class Application
             Connection::configure($config['db']);
         }
 
+        $this->registerRequestScope();
         $this->discoverProviders();
         $this->registerProviders();
+    }
+
+    /**
+     * Register the engine's own request-scoped state with the reset registry.
+     *
+     * Only meaningful under a worker runtime; harmless under PHP-FPM.
+     */
+    protected function registerRequestScope(): void
+    {
+        RequestScope::onReset(function (): void {
+            $this->action = null;
+            $this->user = null;
+            $this->session = null;
+        }, 'engine.application');
+    }
+
+    /**
+     * Prepare the kernel to serve another request in the same process.
+     *
+     * Replaces the request and response, clears everything registered with
+     * {@see RequestScope} and rebinds the router. Called by the worker runtime;
+     * a classic PHP-FPM request never needs it.
+     *
+     * @param Request|null  $request  Request to serve, or null for a fresh one
+     * @param Response|null $response Response to build into, or null for a fresh one
+     */
+    public function prepareForNextRequest(?Request $request = null, ?Response $response = null): void
+    {
+        RequestScope::reset();
+
+        $this->request = $request ?? new Request();
+        $this->response = $response ?? new Response();
+
+        $this->router->request = $this->request;
+        $this->router->response = $this->response;
     }
 
     /**
