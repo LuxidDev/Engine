@@ -1,219 +1,364 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Luxid\Http;
 
+/**
+ * HTTP request representation.
+ *
+ * Reads from the PHP superglobals by default, but every source can be overridden
+ * so the same object works under PHP-FPM, FrankenPHP and in tests.
+ *
+ * @package Luxid\Http
+ */
 class Request
 {
     /**
-     * @var array|null Cached request body to avoid repeated parsing
+     * HTTP methods this framework routes on.
+     *
+     * @var list<string>
+     */
+    private const SUPPORTED_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options'];
+
+    /**
+     * Parsed request body, cached to avoid re-reading php://input.
+     *
+     * @var array<string, mixed>|null
      */
     private ?array $cachedBody = null;
 
     /**
-     * @var array|null Cached query parameters
+     * Parsed query string parameters.
+     *
+     * @var array<string, mixed>|null
      */
     private ?array $cachedQuery = null;
 
+    /**
+     * Explicit path override, used by non-FPM adapters.
+     */
     protected string $customPath = '';
+
+    /**
+     * Explicit method override, used by non-FPM adapters.
+     */
     protected string $customMethod = '';
+
+    /**
+     * Raw body override, used by non-FPM adapters.
+     */
     protected string $customBody = '';
+
+    /**
+     * Header overrides keyed by lowercased header name.
+     *
+     * @var array<string, string>
+     */
     protected array $customHeaders = [];
 
+    /**
+     * Override the request path.
+     *
+     * @param string $path Path without query string
+     */
     public function setPath(string $path): void
     {
         $this->customPath = $path;
     }
 
+    /**
+     * Override the request method.
+     *
+     * @param string $method HTTP method, case insensitive
+     */
     public function setMethod(string $method): void
     {
-        $this->customMethod = $method;
+        $this->customMethod = strtolower($method);
     }
 
+    /**
+     * Override the raw request body.
+     *
+     * JSON bodies are decoded eagerly so {@see Request::getBody()} can serve them
+     * without touching php://input.
+     *
+     * @param string $body Raw request body
+     */
     public function setBody(string $body): void
     {
         $this->customBody = $body;
-        $this->cachedBody = json_decode($body, true);
+
+        $decoded = json_decode($body, true);
+        $this->cachedBody = is_array($decoded) ? $decoded : null;
     }
 
+    /**
+     * Override a request header.
+     *
+     * @param string $name  Header name, case insensitive
+     * @param string $value Header value
+     */
     public function setHeader(string $name, string $value): void
     {
-        $this->customHeaders[$name] = $value;
+        $this->customHeaders[strtolower($name)] = $value;
     }
 
-    public function getPath()
+    /**
+     * Get a request header.
+     *
+     * @param string $name    Header name, case insensitive
+     * @param string|null $default Value returned when the header is absent
+     */
+    public function header(string $name, ?string $default = null): ?string
     {
-        if ($this->customPath) {
+        $name = strtolower($name);
+
+        if (isset($this->customHeaders[$name])) {
+            return $this->customHeaders[$name];
+        }
+
+        $serverKey = 'HTTP_' . strtoupper(str_replace('-', '_', $name));
+
+        return $_SERVER[$serverKey] ?? $default;
+    }
+
+    /**
+     * Get the request path, stripped of any query string.
+     */
+    public function getPath(): string
+    {
+        if ($this->customPath !== '') {
             return $this->customPath;
         }
-        // Fallback to superglobals for PHP-FPM
-        $path = $_SERVER["REQUEST_URI"] ?? '/';
+
+        $path = $_SERVER['REQUEST_URI'] ?? '/';
         $position = strpos($path, '?');
+
         return $position === false ? $path : substr($path, 0, $position);
     }
 
-    public function method()
+    /**
+     * Get the lowercased HTTP method.
+     *
+     * Honours the `_method` form field and the `X-HTTP-Method-Override` header so
+     * HTML forms can issue PUT/PATCH/DELETE. Overrides are only accepted on POST
+     * and only when they name a method the router understands.
+     */
+    public function method(): string
     {
-        if ($this->customMethod) {
+        if ($this->customMethod !== '') {
             return $this->customMethod;
         }
-        // Fallback for PHP-FPM
+
         $method = strtolower($_SERVER['REQUEST_METHOD'] ?? 'get');
 
-        // Check for method overrid in POST data
-        if ($method === 'post' && isset($_POST['method'])) {
-            return strtolower($_POST['_method']);
+        if ($method !== 'post') {
+            return $method;
         }
 
-        // Check for method override in headers
-        if (isset($_SERVER['HTTP_X_HTTP_METHOD_OVERRIDE'])) {
-            return strtolower($_SERVER['HTTP_X_HTTP_METHOD_OVERRIDE']);
+        $override = $_POST['_method'] ?? $_SERVER['HTTP_X_HTTP_METHOD_OVERRIDE'] ?? null;
+
+        if (is_string($override)) {
+            $override = strtolower($override);
+
+            if (in_array($override, self::SUPPORTED_METHODS, true)) {
+                return $override;
+            }
         }
 
         return $method;
     }
 
     /**
-     * Get all request data with automatic sanitization and caching
+     * Get all request data, sanitized and cached.
      *
-     * Handles different request types:
-     * - GET requests: Returns sanitized $_GET data
-     * - POST requests: Returns sanitized $_POST or JSON data
-     * - PUT/PATCH/DELETE: Parses raw input (form or JSON)
+     * GET requests read the query string; every other method reads the decoded
+     * JSON body, the POST fields, or the raw url-encoded body in that order.
      *
-     * @return array Associative array of request data
-     *
-     * Note: Results are cached to avoid repeated parsing of php://input
+     * @return array<string, mixed>
      */
-    public function getBody()
+    public function getBody(): array
     {
-        // Return cached result if available
         if ($this->cachedBody !== null) {
             return $this->cachedBody;
         }
 
-        $body = [];
-        $method = $this->method();
+        $this->cachedBody = $this->method() === 'get'
+            ? $this->sanitize($_GET)
+            : $this->parseRequestBody();
 
-        /**
-            have a look in the Super Global 'GET' and 'POST
-            find the key, take the value
-            remove invalid chars and insert into the body
-        */
-        if ($method === 'get') {
-            foreach ($_GET as $key => $value) {
-                $body[$key] = filter_input(INPUT_GET, $key, FILTER_SANITIZE_SPECIAL_CHARS);
-            }
-        } else {
-            // Handle POST, PUT, PATCH, DELETE
-
-            // First check if it's JSON input
-            $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
-            $rawInput = file_get_contents('php://input');
-
-            if (strpos($contentType, 'application/json') !== false) {
-                // JSON input
-                $jsonData = json_decode($rawInput, true);
-                if (json_last_error() === JSON_ERROR_NONE) {
-                    $body = $jsonData;
-                }
-            } else {
-                // Form data
-                if ($method === 'post') {
-                    foreach ($_POST as $key => $value) {
-                        $body[$key] = filter_input(INPUT_POST, $key, FILTER_SANITIZE_SPECIAL_CHARS);
-                    }
-                }
-
-                // Also parse raw input for PUT/PATCH/DELETE
-                if (!empty($rawInput) && empty($body)) {
-                    parse_str($rawInput, $parsed);
-                    foreach ($parsed as $key => $value) {
-                        $body[$key] = filter_var($value, FILTER_SANITIZE_SPECIAL_CHARS);
-                    }
-                }
-            }
-        }
-
-        // Cache the result
-        $this->cachedBody = $body;
-
-        return $body;
+        return $this->cachedBody;
     }
 
     /**
-     * Clear the cached request body (useful for testing)
+     * Parse the body of a non-GET request.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseRequestBody(): array
+    {
+        $rawInput = $this->customBody !== '' ? $this->customBody : (string) file_get_contents('php://input');
+
+        if ($this->isJson()) {
+            $decoded = json_decode($rawInput, true);
+
+            return is_array($decoded) ? $decoded : [];
+        }
+
+        if ($_POST !== []) {
+            return $this->sanitize($_POST);
+        }
+
+        if ($rawInput !== '') {
+            parse_str($rawInput, $parsed);
+
+            return $this->sanitize($parsed);
+        }
+
+        return [];
+    }
+
+    /**
+     * Recursively strip HTML control characters from untrusted input.
+     *
+     * @param array<array-key, mixed> $input
+     *
+     * @return array<array-key, mixed>
+     */
+    private function sanitize(array $input): array
+    {
+        $sanitized = [];
+
+        foreach ($input as $key => $value) {
+            if (is_array($value)) {
+                $sanitized[$key] = $this->sanitize($value);
+                continue;
+            }
+
+            $sanitized[$key] = is_string($value)
+                ? filter_var($value, FILTER_SANITIZE_FULL_SPECIAL_CHARS)
+                : $value;
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * Discard the cached body and query, forcing a re-parse.
      */
     public function clearCache(): void
     {
         $this->cachedBody = null;
-    }
-
-    // Utility Methods (helpers) ================
-    public function isGet()
-    {
-        return $this->method() === 'get';
-    }
-
-    public function isPost()
-    {
-        return $this->method() === 'post';
-    }
-
-    public function isPut()
-    {
-        return $this->method() === 'put';
-    }
-
-    public function isPatch()
-    {
-        return $this->method() === 'patch';
-    }
-
-    public function isDelete()
-    {
-        return $this->method() === 'delete';
-    }
-
-    public function isJson()
-    {
-        $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
-        return strpos($contentType, 'application/json') !== false;
-    }
-
-    public function getJson()
-    {
-        $rawInput = file_get_contents('php://input');
-        return json_decode($rawInput, true);
+        $this->cachedQuery = null;
     }
 
     /**
-     * Get input value by key
+     * Check whether the request uses the given method.
      *
-     * @param string $key The parameter name to retrieve
-     * @param mixed $default Default value if key doesn't exist
-     * @return mixed The parameter value or default
-     *
-     * Example:
-     * - Request: GET /api/todos?status=pending
-     * - $request->get('status') returns 'pending'
-     * - $request->get('search', 'default') returns 'default'
+     * @param string $method HTTP method, case insensitive
      */
-    public function get(string $key, $default = null)
+    public function isMethod(string $method): bool
     {
-        $body = $this->getBody();
-        return $body[$key] ?? $default;
+        return $this->method() === strtolower($method);
     }
 
     /**
-     * Get all input data
+     * Check whether this is a GET request.
+     */
+    public function isGet(): bool
+    {
+        return $this->isMethod('get');
+    }
+
+    /**
+     * Check whether this is a POST request.
+     */
+    public function isPost(): bool
+    {
+        return $this->isMethod('post');
+    }
+
+    /**
+     * Check whether this is a PUT request.
+     */
+    public function isPut(): bool
+    {
+        return $this->isMethod('put');
+    }
+
+    /**
+     * Check whether this is a PATCH request.
+     */
+    public function isPatch(): bool
+    {
+        return $this->isMethod('patch');
+    }
+
+    /**
+     * Check whether this is a DELETE request.
+     */
+    public function isDelete(): bool
+    {
+        return $this->isMethod('delete');
+    }
+
+    /**
+     * Check whether the request carries a JSON body.
+     */
+    public function isJson(): bool
+    {
+        $contentType = $this->header('content-type', $_SERVER['CONTENT_TYPE'] ?? '') ?? '';
+
+        return str_contains($contentType, 'application/json');
+    }
+
+    /**
+     * Check whether the client asked for a JSON response.
+     */
+    public function wantsJson(): bool
+    {
+        $accept = $this->header('accept', $_SERVER['HTTP_ACCEPT'] ?? '') ?? '';
+
+        return $this->isJson() || str_contains($accept, 'application/json');
+    }
+
+    /**
+     * Check whether the request was issued by a JavaScript client.
+     */
+    public function isAjax(): bool
+    {
+        return strtolower($this->header('x-requested-with', '') ?? '') === 'xmlhttprequest';
+    }
+
+    /**
+     * Decode the raw body as JSON.
      *
-     * Alias for getBody() for consistency with other frameworks
+     * @return array<string, mixed>|null Null when the body is absent or malformed
+     */
+    public function getJson(): ?array
+    {
+        $rawInput = $this->customBody !== '' ? $this->customBody : (string) file_get_contents('php://input');
+        $decoded = json_decode($rawInput, true);
+
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    /**
+     * Get a single value from the request data.
      *
-     * @return array All request parameters
+     * @param string $key     Parameter name
+     * @param mixed  $default Value returned when the key is absent
+     */
+    public function get(string $key, mixed $default = null): mixed
+    {
+        return $this->getBody()[$key] ?? $default;
+    }
+
+    /**
+     * Get every request parameter.
      *
-     * Example:
-     * - Request: GET /api/todos?status=pending&search=work
-     * - Returns: ['status' => 'pending', 'search' => 'work']
+     * @return array<string, mixed>
      */
     public function all(): array
     {
@@ -221,14 +366,11 @@ class Request
     }
 
     /**
-     * Get only specific keys from request data
+     * Get a subset of the request data.
      *
-     * @param array $keys Array of keys to retrieve
-     * @return array Associative array with only specified keys
+     * @param list<string> $keys Parameter names to keep
      *
-     * Example:
-     * - Request data: ['title' => 'Todo', 'status' => 'pending', 'extra' => 'data']
-     * - $request->only(['title', 'status']) returns ['title' => 'Todo', 'status' => 'pending']
+     * @return array<string, mixed>
      */
     public function only(array $keys): array
     {
@@ -236,7 +378,7 @@ class Request
         $result = [];
 
         foreach ($keys as $key) {
-            if (isset($body[$key])) {
+            if (array_key_exists($key, $body)) {
                 $result[$key] = $body[$key];
             }
         }
@@ -245,45 +387,50 @@ class Request
     }
 
     /**
-     * Check if request contains a specific key
+     * Get the request data with the given keys removed.
      *
-     * @param string $key The parameter name to check
-     * @return bool True if key exists in request data
+     * @param list<string> $keys Parameter names to drop
      *
-     * Example:
-     * - Request: GET /api/todos?status=pending
-     * - $request->has('status') returns true
-     * - $request->has('search') returns false
+     * @return array<string, mixed>
      */
-    public function has(string $key): bool
+    public function except(array $keys): array
     {
-        $body = $this->getBody();
-        return isset($body[$key]);
+        return array_diff_key($this->getBody(), array_flip($keys));
     }
 
     /**
-     * Get query parameters (GET requests only)
+     * Check whether a key is present in the request data.
      *
-     * This method is specifically for query string parameters
-     * Unlike getBody() which merges everything, this only returns $_GET data
-     *
-     * @param string $key The query parameter name
-     * @param mixed $default Default value if key doesn't exist
-     * @return mixed The query parameter value or default
-     *
-     * Example:
-     * - URL: /api/todos?status=pending&page=2
-     * - $request->query('status') returns 'pending'
-     * - $request->query('sort', 'created_at') returns 'created_at'
+     * @param string $key Parameter name
      */
-    public function query(string $key = null, $default = null)
+    public function has(string $key): bool
     {
-        if ($this->cachedQuery === null) {
-            $this->cachedQuery = [];
-            foreach ($_GET as $key => $value) {
-                $this->cachedQuery[$key] = filter_input(INPUT_GET, $key, FILTER_SANITIZE_SPECIAL_CHARS);
-            }
-        }
+        return array_key_exists($key, $this->getBody());
+    }
+
+    /**
+     * Check whether a key is present and not empty.
+     *
+     * @param string $key Parameter name
+     */
+    public function filled(string $key): bool
+    {
+        $value = $this->get($key);
+
+        return $value !== null && $value !== '' && $value !== [];
+    }
+
+    /**
+     * Get one or all query string parameters.
+     *
+     * @param string|null $key     Parameter name, or null for the whole array
+     * @param mixed       $default Value returned when the key is absent
+     *
+     * @return mixed The value, or array<string, mixed> when $key is null
+     */
+    public function query(?string $key = null, mixed $default = null): mixed
+    {
+        $this->cachedQuery ??= $this->sanitize($_GET);
 
         if ($key === null) {
             return $this->cachedQuery;
@@ -293,30 +440,20 @@ class Request
     }
 
     /**
-     * Get POST/PUT/PATCH input data (not including query parameters)
+     * Get one or all body parameters, excluding the query string.
      *
-     * This method returns only the request body data, not query string parameters
-     * Useful when you want to separate query params from body content
+     * @param string|null $key     Parameter name, or null for the whole array
+     * @param mixed       $default Value returned when the key is absent
      *
-     * @param string $key The input parameter name
-     * @param mixed $default Default value if key doesn't exist
-     * @return mixed The input value or default
-     *
-     * Example for POST request:
-     * - Body: {"title": "Todo", "status": "pending"}
-     * - $request->input('title') returns 'Todo'
+     * @return mixed The value, or array<string, mixed> when $key is null
      */
-    public function input(string $key = null, $default = null)
+    public function input(?string $key = null, mixed $default = null): mixed
     {
-        $body = $this->getBody();
-
-        // For GET requests, input() should return empty (use query() instead)
         if ($this->isGet()) {
-            if ($key === null) {
-                return [];
-            }
-            return $default;
+            return $key === null ? [] : $default;
         }
+
+        $body = $this->getBody();
 
         if ($key === null) {
             return $body;
