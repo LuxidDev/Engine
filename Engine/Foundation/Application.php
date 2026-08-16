@@ -117,6 +117,11 @@ class Application
     protected array $providers = [];
 
     /**
+     * Compiled index of what installed packages contribute.
+     */
+    protected ?PackageManifest $manifest = null;
+
+    /**
      * @param string               $rootPath Absolute path to the project root
      * @param array<string, mixed> $config   Application configuration
      */
@@ -148,28 +153,25 @@ class Application
 
     /**
      * Discover provider classes declared under `extra.luxid.providers`.
+     *
+     * Reads the compiled manifest rather than re-parsing Composer's 30KB
+     * `installed.json` on every request.
      */
     protected function discoverProviders(): void
     {
-        $installedPath = self::$ROOT_DIR . '/vendor/composer/installed.json';
-
-        if (!is_file($installedPath)) {
-            return;
-        }
-
-        $installed = json_decode((string) file_get_contents($installedPath), true);
-
-        if (!is_array($installed)) {
-            return;
-        }
-
-        foreach ($installed['packages'] ?? $installed as $package) {
-            foreach ($package['extra']['luxid']['providers'] ?? [] as $provider) {
-                if (class_exists($provider)) {
-                    $this->providers[] = $provider;
-                }
+        foreach ($this->packageManifest()->providers() as $provider) {
+            if (class_exists($provider)) {
+                $this->providers[] = $provider;
             }
         }
+    }
+
+    /**
+     * Get the compiled package manifest for this application.
+     */
+    public function packageManifest(): PackageManifest
+    {
+        return $this->manifest ??= new PackageManifest(self::$ROOT_DIR . '/vendor');
     }
 
     /**
