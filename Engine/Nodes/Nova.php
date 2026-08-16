@@ -1,132 +1,156 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Luxid\Nodes;
 
 use Luxid\Foundation\Application;
-use Luxid\Nova\Slot;
+use Luxid\Foundation\Screen;
 
+/**
+ * Static facade for rendering views.
+ *
+ * Prefers the `luxid/nova` component engine when it is installed and falls back
+ * to the legacy {@see Screen} renderer otherwise, so an application can adopt
+ * Nova incrementally.
+ *
+ * @package Luxid\Nodes
+ */
 class Nova
 {
     /**
-     * Get the current Screen instance (legacy)
+     * Layout used for pages when the application configures none.
      */
-    protected static function instance()
+    private const FALLBACK_LAYOUT = 'AppLayout';
+
+    /**
+     * Cached `nova/nova.json` contents.
+     *
+     * @var array<string, mixed>|null
+     */
+    private static ?array $config = null;
+
+    /**
+     * Render a page or component.
+     *
+     * Pages are wrapped in a layout unless one is explicitly suppressed by
+     * passing `layout: null` together with a non-page `$type`.
+     *
+     * @param string               $view   Component name, dot notation permitted
+     * @param array<string, mixed> $data   Props passed to the component
+     * @param string               $type   Component directory: `pages`, `components` or `layouts`
+     * @param string|null          $layout Layout to wrap a page in, or null for the configured default
+     */
+    public static function render(string $view, array $data = [], string $type = 'pages', ?string $layout = null): string
     {
-        if (!Application::$app || !Application::$app->screen) {
-            throw new \RuntimeException("Nova/Screen instance is not available.");
+        if (!self::hasNovaPackage()) {
+            return self::screen()->renderScreen($view, $data);
         }
 
-        return Application::$app->screen;
+        if ($type !== 'pages') {
+            return self::renderComponent($view, $data, $type);
+        }
+
+        $layout ??= self::config()['default_layout'] ?? self::FALLBACK_LAYOUT;
+
+        // Capture the page into the layout's `content` slot, then render the
+        // layout around it.
+        \Luxid\Nova\Slot::start('content');
+        echo self::renderComponent($view, $data, $type);
+        \Luxid\Nova\Slot::end();
+
+        return self::renderComponent($layout, $data, 'layouts');
     }
 
     /**
-     * Check if luxid/nova is available
+     * Render content that has already been produced, inside the active frame.
+     *
+     * @param string $content Rendered body
      */
-    protected static function hasNovaPackage(): bool
+    public static function content(string $content): string
     {
-        return class_exists('Luxid\Nova\ComponentManager');
+        return self::screen()->renderContent($content);
     }
 
     /**
-     * Check if a component exists
+     * Check whether a component is registered.
+     *
+     * @param string $name Component name, dot notation permitted
+     * @param string $type Component directory
      */
-    protected static function isNovaComponent(string $name, string $type = 'pages'): bool
+    public static function exists(string $name, string $type = 'pages'): bool
     {
         if (!self::hasNovaPackage()) {
             return false;
         }
 
-        // Convert dot notation to path
-        $path = str_replace('.', '/', $name);
-        $componentName = $type . '/' . $path;
-
-        return \Luxid\Nova\ComponentManager::has($componentName);
+        return \Luxid\Nova\ComponentManager::has(self::qualify($name, $type));
     }
 
     /**
-     * Render a Nova component
+     * Check whether the `luxid/nova` package is installed.
      */
-    protected static function renderNovaComponent(string $name, array $data = [], string $type = 'pages'): string
+    protected static function hasNovaPackage(): bool
     {
-        $path = str_replace('.', '/', $name);
-        $componentName = $type . '/' . $path;
-
-        return \nova($componentName, $data);
+        return class_exists(\Luxid\Nova\ComponentManager::class);
     }
 
     /**
-     * Render a screen or component with optional layout
+     * Render a registered Nova component.
      *
-     * This method intelligently chooses between:
-     * - New reactive Nova components (if luxid/nova is installed)
-     * - Legacy static screens (fallback)
+     * @param string               $name Component name, dot notation permitted
+     * @param array<string, mixed> $data Props passed to the component
+     * @param string               $type Component directory
+     */
+    protected static function renderComponent(string $name, array $data, string $type): string
+    {
+        return \nova(self::qualify($name, $type), $data);
+    }
+
+    /**
+     * Turn a dotted component name into its registered path.
      *
-     * Examples:
-     * - Nova::render('Welcome') -> renders pages/Welcome with default layout
-     * - Nova::render('Welcome', layout: 'AuthLayout') -> renders with custom layout
-     * - Nova::render('Button', type: 'components') -> renders component without layout
+     * @param string $name Component name, dot notation permitted
+     * @param string $type Component directory
      */
-    public static function render(string $screen, array $data = [], string $type = 'pages', ?string $layout = null): string
+    private static function qualify(string $name, string $type): string
     {
-        // Try to use luxid/nova if available
-        if (self::hasNovaPackage()) {
-            // If no layout specified and it's a page, use default layout
-            if ($type === 'pages' && $layout === null) {
-                $config = self::getConfig();
-                $layout = $config['default_layout'] ?? 'AppLayout';
-            }
-
-            // If we have a layout to apply
-            if ($layout !== null && $type === 'pages') {
-                // Capture the page content for the layout's slot
-                Slot::start('content');
-                echo self::renderNovaComponent($screen, $data, $type);
-                Slot::end();
-
-                // Render the layout with the captured content
-                return self::renderNovaComponent($layout, $data, 'layouts');
-            }
-
-            // Render component directly (no layout)
-            return self::renderNovaComponent($screen, $data, $type);
-        }
-
-        // Fall back to legacy static screens
-        return self::instance()->renderScreen($screen, $data);
+        return $type . '/' . str_replace('.', '/', $name);
     }
 
     /**
-     * Render just content without frame
+     * Read and cache `nova/nova.json`.
+     *
+     * @return array<string, mixed>
      */
-    public static function content(string $screenContent): string
+    private static function config(): array
     {
-        // If it's a Nova component name
-        if (self::isNovaComponent($screenContent, 'pages')) {
-            return self::renderNovaComponent($screenContent, [], 'pages');
+        if (self::$config !== null) {
+            return self::$config;
         }
 
-        // Legacy content rendering
-        return self::instance()->renderContent($screenContent);
+        $path = Application::$ROOT_DIR . '/nova/nova.json';
+
+        if (!is_file($path)) {
+            return self::$config = [];
+        }
+
+        $decoded = json_decode((string) file_get_contents($path), true);
+
+        return self::$config = is_array($decoded) ? $decoded : [];
     }
 
     /**
-     * Get Nova configuration from nova.json
+     * Resolve the legacy screen renderer.
+     *
+     * @throws \RuntimeException When the application has not booted yet
      */
-    private static function getConfig(): array
+    protected static function screen(): Screen
     {
-        $configFile = Application::$ROOT_DIR . '/nova/nova.json';
-        if (file_exists($configFile)) {
-            $config = json_decode(file_get_contents($configFile), true);
-            return is_array($config) ? $config : [];
+        if (!isset(Application::$app)) {
+            throw new \RuntimeException('No screen renderer available; the application has not booted.');
         }
-        return [];
-    }
 
-    /**
-     * Check if a component exists
-     */
-    public static function exists(string $name, string $type = 'pages'): bool
-    {
-        return self::isNovaComponent($name, $type);
+        return Application::$app->screen;
     }
 }
