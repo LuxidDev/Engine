@@ -1,31 +1,31 @@
 <?php
 
-use Luxid\Foundation\Application;
-use Luxid\Routing\RouteBuilder;
+declare(strict_types=1);
+
 use Luxid\Nodes\Route;
+use Luxid\Routing\RouteBuilder;
+use Luxid\Routing\RouteMethod;
 
 if (!function_exists('route')) {
     /**
-     * Global helper function to create a new fluent route
+     * Start a fluent route definition.
+     *
+     * @param string $name Human readable route name
+     *
+     * @throws RuntimeException When the application has not booted yet
      */
     function route(string $name): RouteBuilder
     {
-        // Check if Application::$app is initialized
-        if (!isset(Application::$app) || Application::$app === null) {
-            throw new \RuntimeException(
-                'Application not initialized. Make sure to create an Application instance before defining routes.'
-            );
-        }
-
-        $router = Application::$app->router;
-        return new RouteBuilder($router, $name);
+        return Route::make($name);
     }
 }
 
 if (!function_exists('route_group')) {
     /**
-     * Global helper function for route grouping
-     * Alias for Route::group()
+     * Register a group of routes sharing a prefix, middleware and security.
+     *
+     * @param array<string, mixed>|list<string> $options  Group options
+     * @param callable                          $callback Registers the grouped routes
      */
     function route_group(array $options, callable $callback): void
     {
@@ -34,36 +34,73 @@ if (!function_exists('route_group')) {
 }
 
 if (!function_exists('get')) {
-    function get(string $handler): \Luxid\Routing\RouteMethod
+    /**
+     * Bind a GET route to an activity on the enclosing action.
+     *
+     * @param string $handler Activity (method) name
+     */
+    function get(string $handler): RouteMethod
     {
-        return new \Luxid\Routing\RouteMethod('get', $handler);
+        return new RouteMethod('get', $handler);
     }
 }
 
 if (!function_exists('post')) {
-    function post(string $handler): \Luxid\Routing\RouteMethod
+    /**
+     * Bind a POST route to an activity on the enclosing action.
+     *
+     * @param string $handler Activity (method) name
+     */
+    function post(string $handler): RouteMethod
     {
-        return new \Luxid\Routing\RouteMethod('post', $handler);
+        return new RouteMethod('post', $handler);
     }
 }
 
 if (!function_exists('put')) {
-    function put(string $handler): \Luxid\Routing\RouteMethod
+    /**
+     * Bind a PUT route to an activity on the enclosing action.
+     *
+     * @param string $handler Activity (method) name
+     */
+    function put(string $handler): RouteMethod
     {
-        return new \Luxid\Routing\RouteMethod('put', $handler);
+        return new RouteMethod('put', $handler);
     }
 }
 
 if (!function_exists('patch')) {
-    function patch(string $handler): \Luxid\Routing\RouteMethod
+    /**
+     * Bind a PATCH route to an activity on the enclosing action.
+     *
+     * @param string $handler Activity (method) name
+     */
+    function patch(string $handler): RouteMethod
     {
-        return new \Luxid\Routing\RouteMethod('patch', $handler);
+        return new RouteMethod('patch', $handler);
     }
 }
 
 if (!function_exists('delete')) {
-    function delete(string $handler): \Luxid\Routing\RouteMethod
+    /**
+     * Bind a DELETE route to an activity on the enclosing action.
+     *
+     * @param string $handler Activity (method) name
+     */
+    function delete(string $handler): RouteMethod
     {
-        return new \Luxid\Routing\RouteMethod('delete', $handler);
+        return new RouteMethod('delete', $handler);
+    }
+}
+
+if (!function_exists('e')) {
+    /**
+     * Escape a value for safe interpolation into HTML.
+     *
+     * @param mixed $value Value to escape
+     */
+    function e(mixed $value): string
+    {
+        return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 }
