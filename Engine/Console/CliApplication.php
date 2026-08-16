@@ -1,52 +1,77 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Luxid\Console;
 
 use Luxid\Foundation\Application;
-use Rocket\Connection\Connection;
-use Luxid\Database\DbEntity;
+use Luxid\Foundation\Screen;
+use Luxid\Http\NullSession;
+use Luxid\Http\Request;
+use Luxid\Http\Response;
+use Luxid\Http\SessionInterface;
+use Luxid\Routing\Router;
 
+/**
+ * Application kernel for console runs.
+ *
+ * Boots the same object graph as the web kernel but skips the database, the
+ * session and the provider scan, so commands that only need the router — the
+ * route inspector in particular — start instantly and never touch a connection.
+ *
+ * @package Luxid\Console
+ */
 class CliApplication extends Application
 {
-    // Fix these property types to match parent class
-    public ?Connection $db = null;
-    public ?DbEntity $user = null;
-
-    public function __construct($rootPath, array $config)
+    /**
+     * @param string               $rootPath Absolute path to the project root
+     * @param array<string, mixed> $config   Application configuration
+     */
+    public function __construct(string $rootPath, array $config)
     {
-        $this->userClass = $config['userClass'];
+        self::$ROOT_DIR = $rootPath;
+        self::$app = $this;
 
-        Application::$ROOT_DIR = $rootPath;
-        Application::$app = $this;
+        $this->userClass = $config['userClass'] ?? '';
+        $this->debug = (bool) ($config['debug'] ?? false);
 
-        $this->request = new \Luxid\Http\Request();
-        $this->response = new \Luxid\Http\Response();
-
-        // Create null session for CLI
-        $this->session = new \Luxid\Http\NullSession();
-
-        $this->router = new \Luxid\Routing\Router($this->request, $this->response);
-        $this->screen = new \Luxid\Foundation\Screen();
-
-        // Don't initialize database for CLI - keep as null
-        // $this->db and $this->user remain null
+        $this->request = new Request();
+        $this->response = new Response();
+        $this->session = new NullSession();
+        $this->screen = new Screen();
+        $this->router = new Router($this->request, $this->response);
     }
 
-    // Override any methods that might use $db
+    /**
+     * Console runs are always unauthenticated.
+     */
     public static function isGuest(): bool
     {
-        // In CLI mode, always return true (guest)
         return true;
     }
 
-    public function login(DbEntity $user): bool
+    /**
+     * Signing in is meaningless without a session; this is a no-op.
+     *
+     * @param object $user Ignored
+     */
+    public function login(object $user): bool
     {
-        // No-op in CLI
         return true;
     }
 
+    /**
+     * Signing out is meaningless without a session; this is a no-op.
+     */
     public function logout(): void
     {
-        // No-op in CLI
+    }
+
+    /**
+     * Always hand back the null session.
+     */
+    public function getSession(): SessionInterface
+    {
+        return $this->session ??= new NullSession();
     }
 }
